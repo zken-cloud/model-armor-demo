@@ -1,0 +1,40 @@
+steps:
+  # Build the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', '${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE_NAME}', '.']
+
+  # Push the container image to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', '${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE_NAME}']
+
+  # Deploy container image to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - '${_SERVICE_NAME}'
+      - '--image'
+      - '${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE_NAME}'
+      - '--region'
+      - '${_LOCATION}'
+      - '--platform'
+      - 'managed'
+      - '--service-account'
+      - '${_SERVICE_ACCOUNT}@$PROJECT_ID.iam.gserviceaccount.com'
+      - '--allow-unauthenticated'
+      - '--port'
+      - '8080'
+      - '--set-env-vars'
+      - 'GCP_PROJECT_ID=$PROJECT_ID,GCP_LOCATION=global,MODEL_ARMOR_ENABLED=true'
+
+images:
+  - '${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE_NAME}'
+
+# Default values for substitutions
+substitutions:
+  _LOCATION: us-central1
+  _REPOSITORY: model-armor-repo
+  _IMAGE_NAME: model-armor-demo
+  _SERVICE_NAME: model-armor-demo
+  _SERVICE_ACCOUNT: model-armor-demo-sa
