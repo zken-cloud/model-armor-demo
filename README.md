@@ -1,4 +1,4 @@
-# GenAI Chatbot with Advanced Model Armor Integration
+# Model Armor Demo
 
 This web application demonstrates a sophisticated integration of Google Cloud's Vertex AI foundation models with Model Armor. It provides a highly configurable and performant interface for testing prompt/response sanitization and multimodal interactions.
 
