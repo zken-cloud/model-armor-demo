@@ -111,6 +111,37 @@ template_cache = {}
 file_cache = {}  # Cache for file base64 data
 CACHE_TTL = 300  # 5 minutes
 
+def get_file_data(file):
+    """Reads file, base64 encodes it, and manages cache."""
+    file.seek(0, 2)  # Seek to end
+    file_size = file.tell()
+    file.seek(0)  # Seek back to start
+    file_cache_key = f"{file.filename}_{file_size}"
+    
+    if file_cache_key in file_cache:
+        cached_data, timestamp = file_cache[file_cache_key]
+        if time.time() - timestamp < CACHE_TTL:
+            print(f"INFO: Using cached file data for {file.filename}")
+            return cached_data['base64_data'], cached_data['mime_type']
+        else:
+            del file_cache[file_cache_key]
+            
+    file_content = file.read()
+    file_data_base64 = base64.b64encode(file_content).decode('utf-8')
+    mime_type = mimetypes.guess_type(file.filename)[0]
+    
+    file_cache[file_cache_key] = ({'base64_data': file_data_base64, 'mime_type': mime_type}, time.time())
+    
+    # Clean old cache entries if cache is too large
+    if len(file_cache) > 50:
+        current_time = time.time()
+        expired_keys = [k for k, (_, timestamp) in file_cache.items()
+                       if current_time - timestamp > CACHE_TTL]
+        for k in expired_keys:
+            del file_cache[k]
+            
+    return file_data_base64, mime_type
+
 def get_cache_key(data, template_name, location):
     """Generate cache key for Model Armor results"""
     if isinstance(data, dict):  # File data
@@ -268,58 +299,31 @@ def _generate_with_sdk(prompt, model_info, system_instruction, file_data=None):
     )
     return response.text
 
-def _generate_with_raw_predict(prompt, model_info, system_instruction, file_data=None):
-    """Claude generation via Vertex AI rawPredict"""
-    access_token = get_cached_auth_token()
-    location = model_info['location']
-    url = f"https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/anthropic/models/{model_info['name']}:rawPredict"
-    if file_data:
-        prompt = f"{prompt}\n\nNote: A file ({file_data['filename']}) was uploaded but cannot be processed by this model."
-    payload = {
-        "anthropic_version": "vertex-2023-10-16",
-        "max_tokens": 2048,
-        "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
-    }
-    headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json; charset=utf-8"}
-    try:
-        response = http_client.session.post(url, headers=headers, json=payload, timeout=(5, 30))
-        response.raise_for_status()
-        response_json = response.json()
-        if 'content' in response_json and response_json['content']:
-            return response_json['content'][0]['text']
-        return f"Error: Could not parse Claude response. Full response: {response.text}"
-    except requests.exceptions.RequestException as e:
-        return f"Error: {e.response.status_code} - {e.response.text}" if hasattr(e, 'response') else f"Error making request: {e}"
-
 def generate_model_response(prompt, model_info, system_instruction, file_data=None):
     """Original generation function using SDK"""
-    provider = model_info.get('provider', 'Google')
-    if provider == 'Anthropic':
-        return _generate_with_raw_predict(prompt, model_info, system_instruction, file_data)
-    else:
-        return _generate_with_sdk(prompt, model_info, system_instruction, file_data)
+    return _generate_with_sdk(prompt, model_info, system_instruction, file_data)
 
 def serialize_template(template):
     """Helper to serialize template in a human-friendly format."""
-    # Map filter type enum values to readable names
+    # Map filter type enum values to readable names, supporting both int and string keys
     FILTER_TYPE_MAP = {
-        0: 'Unspecified',
+        0: 'Unspecified', 'RAI_FILTER_TYPE_UNSPECIFIED': 'Unspecified',
         1: 'Prompt Injection',
-        2: 'Hate Speech',
-        3: 'Dangerous',
+        2: 'Hate Speech', 'HATE_SPEECH': 'Hate Speech',
+        3: 'Dangerous', 'DANGEROUS': 'Dangerous',
         4: 'Jailbreak',
         5: 'Malicious URL',
-        6: 'Harassment',
+        6: 'Harassment', 'HARASSMENT': 'Harassment',
         7: 'Multilanguage',
-        17: 'Sexually Explicit'
+        17: 'Sexually Explicit', 'SEXUALLY_EXPLICIT': 'Sexually Explicit'
     }
     
-    # Map confidence level enum values
+    # Map confidence level enum values, supporting both int and string keys
     CONFIDENCE_MAP = {
-        0: 'UNSPECIFIED',
-        1: 'LOW',
-        2: 'MEDIUM',
-        3: 'HIGH'
+        0: 'UNSPECIFIED', 'DETECTION_CONFIDENCE_LEVEL_UNSPECIFIED': 'UNSPECIFIED',
+        1: 'LOW', 'LOW_AND_ABOVE': 'LOW',
+        2: 'MEDIUM', 'MEDIUM_AND_ABOVE': 'MEDIUM',
+        3: 'HIGH', 'HIGH': 'HIGH'
     }
     
     config = {
@@ -331,88 +335,87 @@ def serialize_template(template):
     }
     
     try:
-        if hasattr(template, 'filter_config') and template.filter_config:
-            filter_config = template.filter_config
+        def get_field(obj, name, default=None):
+            if isinstance(obj, dict):
+                return obj.get(name, default)
+            return getattr(obj, name, default)
             
+        filter_config = get_field(template, 'filterConfig') or get_field(template, 'filter_config')
+        
+        if filter_config:
             # Extract RAI settings
-            if hasattr(filter_config, 'rai_settings') and filter_config.rai_settings:
-                rai = filter_config.rai_settings
-                
-                # Extract RAI filters (new structure with rai_filters array)
-                if hasattr(rai, 'rai_filters'):
-                    for rai_filter in rai.rai_filters:
-                        # Get filter type as integer
-                        filter_type_val = getattr(rai_filter, 'filter_type', 0)
-                        if isinstance(filter_type_val, str):
-                            filter_type_val = int(filter_type_val) if filter_type_val.isdigit() else 0
-                        
-                        # Get confidence level as integer
-                        confidence_val = getattr(rai_filter, 'confidence_level', 0)
-                        if isinstance(confidence_val, str):
-                            confidence_val = int(confidence_val) if confidence_val.isdigit() else 0
+            rai = get_field(filter_config, 'raiSettings') or get_field(filter_config, 'rai_settings')
+            if rai:
+                rai_filters = get_field(rai, 'raiFilters') or get_field(rai, 'rai_filters')
+                if rai_filters:
+                    for rai_filter in rai_filters:
+                        filter_type_val = get_field(rai_filter, 'filterType') or get_field(rai_filter, 'filter_type', 0)
+                        confidence_val = get_field(rai_filter, 'confidenceLevel') or get_field(rai_filter, 'confidence_level', 0)
                         
                         # Map to readable names
                         display_type = FILTER_TYPE_MAP.get(filter_type_val, f'Unknown Filter ({filter_type_val})')
                         threshold = CONFIDENCE_MAP.get(confidence_val, 'UNKNOWN')
                         
                         config['rai_filters'].append(f"{display_type}: {threshold}")
+                        
+                        # For structured data, try to keep it as int if possible, but strings are ok too
                         config['rai_filters_structured'].append({
                             'filter_type': filter_type_val,
                             'confidence_level': confidence_val
                         })
-            
+                        
             # Extract PI and Jailbreak filter settings
-            if hasattr(filter_config, 'pi_and_jailbreak_filter_settings') and filter_config.pi_and_jailbreak_filter_settings:
-                pi_jb = filter_config.pi_and_jailbreak_filter_settings
-                enforcement = getattr(pi_jb, 'filter_enforcement', 0)
-                # filter_enforcement: 0=UNSPECIFIED, 1=ENABLED, 2=DISABLED
-                if enforcement == 1 or str(enforcement) == 'ENABLED' or 'ENABLED' in str(enforcement):
-                    confidence_val = getattr(pi_jb, 'confidence_level', 0)
-                    if isinstance(confidence_val, str):
-                        confidence_val = int(confidence_val) if confidence_val.isdigit() else 0
+            pi_jb = get_field(filter_config, 'piAndJailbreakFilterSettings') or get_field(filter_config, 'pi_and_jailbreak_filter_settings')
+            if pi_jb:
+                enforcement = get_field(pi_jb, 'filterEnforcement') or get_field(pi_jb, 'filter_enforcement', 0)
+                confidence_val = get_field(pi_jb, 'confidenceLevel') or get_field(pi_jb, 'confidence_level', 0)
+                
+                # Store raw confidence value for UI
+                config['other_settings']['pi_jb_confidence'] = confidence_val
+                
+                if enforcement == 1 or enforcement == 'ENABLED':
                     threshold = CONFIDENCE_MAP.get(confidence_val, 'UNKNOWN')
                     config['detection_filters'].append(f"Prompt Injection & Jailbreak: {threshold}")
             
             # Extract Malicious URL filter settings
-            if hasattr(filter_config, 'malicious_uri_filter_settings') and filter_config.malicious_uri_filter_settings:
-                mal_url = filter_config.malicious_uri_filter_settings
-                enforcement = getattr(mal_url, 'filter_enforcement', 0)
-                # filter_enforcement: 0=UNSPECIFIED, 1=ENABLED, 2=DISABLED
-                if enforcement == 1 or str(enforcement) == 'ENABLED' or 'ENABLED' in str(enforcement):
+            mal_url = get_field(filter_config, 'maliciousUriFilterSettings') or get_field(filter_config, 'malicious_uri_filter_settings')
+            if mal_url:
+                enforcement = get_field(mal_url, 'filterEnforcement') or get_field(mal_url, 'filter_enforcement', 0)
+                if enforcement == 1 or enforcement == 'ENABLED':
                     config['detection_filters'].append("Malicious URL: Enabled")
             
             # Extract SDP settings
-            if hasattr(filter_config, 'sdp_settings') and filter_config.sdp_settings:
-                sdp = filter_config.sdp_settings
-                
-                if hasattr(sdp, 'basic_config') and sdp.basic_config:
-                    config['sdp_settings']['mode'] = 'Basic'
-                    if hasattr(sdp.basic_config, 'info_types'):
-                        info_types = [str(it) for it in sdp.basic_config.info_types]
-                        config['sdp_settings']['info_types'] = info_types[:5]  # Limit to first 5
-                
-                if hasattr(sdp, 'advanced_config') and sdp.advanced_config:
-                    config['sdp_settings']['mode'] = 'Advanced (DLP)'
-                    adv = sdp.advanced_config
-                    if hasattr(adv, 'inspect_template'):
-                        template_name = str(adv.inspect_template).split('/')[-1] if adv.inspect_template else 'None'
-                        config['sdp_settings']['inspect_template'] = template_name
-                    if hasattr(adv, 'deidentify_template'):
-                        template_name = str(adv.deidentify_template).split('/')[-1] if adv.deidentify_template else 'None'
-                        config['sdp_settings']['deidentify_template'] = template_name
+            sdp = get_field(filter_config, 'sdpSettings') or get_field(filter_config, 'sdp_settings')
+            if sdp:
+                bc = get_field(sdp, 'basicConfig') or get_field(sdp, 'basic_config')
+                if bc:
+                    enforcement = get_field(bc, 'filterEnforcement') or get_field(bc, 'filter_enforcement', 0)
+                    if enforcement == 1 or enforcement == 'ENABLED':
+                        config['sdp_settings']['mode'] = 'Basic'
+                        
+                adv = get_field(sdp, 'advancedConfig') or get_field(sdp, 'advanced_config')
+                if adv:
+                    inspect_template = get_field(adv, 'inspectTemplate') or get_field(adv, 'inspect_template', '')
+                    deidentify_template = get_field(adv, 'deidentifyTemplate') or get_field(adv, 'deidentify_template', '')
+                    if inspect_template or deidentify_template:
+                        config['sdp_settings']['mode'] = 'Advanced (DLP)'
+                        config['sdp_settings']['inspect_template'] = inspect_template.split('/')[-1] if inspect_template else 'None'
+                        config['sdp_settings']['deidentify_template'] = deidentify_template.split('/')[-1] if deidentify_template else 'None'
         
         # Add metadata if available
-        if hasattr(template, 'template_metadata') and template.template_metadata:
-            meta = template.template_metadata
-            if hasattr(meta, 'log_template_operations'):
-                config['other_settings']['logging_enabled'] = bool(meta.log_template_operations)
-        
+        template_metadata = get_field(template, 'templateMetadata') or get_field(template, 'template_metadata')
+        if template_metadata:
+            log_template_operations = get_field(template_metadata, 'logTemplateOperations') or get_field(template_metadata, 'log_template_operations')
+            if log_template_operations is not None:
+                config['other_settings']['logging_enabled'] = bool(log_template_operations)
+                
         return config
     except Exception as e:
         print(f"Error serializing template: {e}")
         import traceback
         traceback.print_exc()
         return {'error': str(e)}
+
 
 def fetch_model_armor_templates(location, endpoint):
     # Check cache first
@@ -424,20 +427,47 @@ def fetch_model_armor_templates(location, endpoint):
     
     local_prompt_templates, local_response_templates = [], []
     try:
-        client = get_model_armor_client(location, endpoint)
-        request = modelarmor_v1.ListTemplatesRequest(parent=f"projects/{project}/locations/{location}")
-        page_result = client.list_templates(request=request)
-        for template in page_result:
-            template_name = template.name.split('/')[-1]
+        import google.auth
+        from google.auth.transport.requests import Request
+        import requests
+        
+        credentials, _ = google.auth.default()
+        credentials.refresh(Request())
+        token = credentials.token
+        
+        url = f"https://{endpoint}/v1/projects/{project}/locations/{location}/templates"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        
+        print(f"Fetching templates from {url}...", flush=True)
+        resp = requests.get(url, headers=headers)
+        if resp.status_code != 200:
+            print(f"Failed to list templates from {location}: {resp.text}")
+            return [], []
+            
+        data = resp.json()
+        templates = data.get('templates', [])
+        
+        for template in templates:
+            template_name = template.get('name', '').split('/')[-1]
             if not template_name.startswith('modelarmor-demo-'):
                 continue
             config_dict = serialize_template(template)
+            print(f"DEBUG template {template_name} config: {config_dict['sdp_settings']}", flush=True)
+            
+            # Parse updateTime from string to datetime object if needed, or just use string
+            # The original code used template.update_time.strftime('%Y-%m-%d %H:%M:%S UTC')
+            # REST API returns string like "2026-04-17T03:02:51.300961843Z"
+            # Let's just use the string or parse it.
+            update_time_str = template.get('updateTime', '')
             
             template_info = {
                 'name': template_name, 
                 'display_name': template_name, 
                 'location': location, 
-                'last_updated': template.update_time.strftime('%Y-%m-%d %H:%M:%S UTC'),
+                'last_updated': update_time_str, # Just use the string from API
                 'config': config_dict
             }
             if template_name.endswith('-prompt'):
@@ -760,38 +790,14 @@ def analyze_prompt():
             if not endpoint_info:
                 return jsonify({'error': 'Invalid location for analysis'}), 400
 
-            # Generate a cache key based on filename and file size
-            file.seek(0, 2)  # Seek to end
-            file_size = file.tell()
-            file.seek(0)  # Seek back to start
-            file_cache_key = f"{file.filename}_{file_size}"
+            # Security Check: Enforce file extensions
+            if not allowed_file(file.filename):
+                return jsonify({'error': f'File type not allowed. Allowed types: {", ".join(ALLOWED_EXTENSIONS)}'}), 400
+                
+            # Security Check: Sanitize filename
+            file.filename = secure_filename(file.filename)
             
-            # Check if we have this file cached
-            if file_cache_key in file_cache:
-                cached_data, timestamp = file_cache[file_cache_key]
-                if time.time() - timestamp < CACHE_TTL:
-                    file_data_base64 = cached_data['base64_data']
-                    mime_type = cached_data['mime_type']
-                    print(f"INFO: Using cached file data for {file.filename}")
-                else:
-                    del file_cache[file_cache_key]
-                    file_content = file.read()
-                    file_data_base64 = base64.b64encode(file_content).decode('utf-8')
-                    mime_type = mimetypes.guess_type(file.filename)[0]
-                    file_cache[file_cache_key] = ({'base64_data': file_data_base64, 'mime_type': mime_type}, time.time())
-            else:
-                file_content = file.read()
-                file_data_base64 = base64.b64encode(file_content).decode('utf-8')
-                mime_type = mimetypes.guess_type(file.filename)[0]
-                # Cache the file data
-                file_cache[file_cache_key] = ({'base64_data': file_data_base64, 'mime_type': mime_type}, time.time())
-                # Clean old cache entries if cache is too large
-                if len(file_cache) > 50:
-                    current_time = time.time()
-                    expired_keys = [k for k, (_, timestamp) in file_cache.items()
-                                   if current_time - timestamp > CACHE_TTL]
-                    for k in expired_keys:
-                        del file_cache[k]
+            file_data_base64, mime_type = get_file_data(file)
 
             result = sanitize_file_prompt_with_rest_api_optimized(
                 file_data_base64, mime_type, prompt_template, location, endpoint_info['endpoint']
@@ -846,76 +852,168 @@ def update_template():
         template_name = data.get('templateName')
         location = data.get('location')
         config_data = data.get('config')
+        print(f"DEBUG config_data from frontend: {config_data}", flush=True)
 
         if not template_name or not location or not config_data:
             return jsonify({'error': 'Missing templateName, location, or config'}), 400
 
         if not template_name.startswith('modelarmor-demo-'):
             return jsonify({'error': 'Only dedicated demo templates can be modified'}), 403
-
         endpoint_info = next((e for e in model_armor_endpoints if e["location"] == location), None)
         if not endpoint_info:
             return jsonify({'error': 'Invalid location'}), 400
 
-        client = get_model_armor_client(location, endpoint_info['endpoint'])
-        
         # Construct template path
         name = f"projects/{project}/locations/{location}/templates/{template_name}"
-        
-        # Fetch existing template to get update mask or just overwrite
-        # For simplicity, let's try to construct a new template object and update it.
-        # We might need to specify update_mask.
-        
-        template = modelarmor_v1.Template()
-        template.name = name
-        filter_config_dict = {}
-        
+
+        # Construct payload for REST API
+        payload = {}
+        filter_config = {}
+        update_mask = []
+
         if 'pi_and_jailbreak' in config_data:
-            filter_config_dict['pi_and_jailbreak_filter_settings'] = {
-                'filter_enforcement': 1 if config_data['pi_and_jailbreak'] == 'ENABLED' else 2
+            pi_jb_settings = {
+                'filterEnforcement': 'ENABLED' if config_data['pi_and_jailbreak'] == 'ENABLED' else 'DISABLED'
             }
             
+            if 'pi_jb_confidence' in config_data:
+                conf_map = {
+                    0: 'DETECTION_CONFIDENCE_LEVEL_UNSPECIFIED',
+                    1: 'LOW_AND_ABOVE',
+                    2: 'MEDIUM_AND_ABOVE',
+                    3: 'HIGH',
+                    '0': 'DETECTION_CONFIDENCE_LEVEL_UNSPECIFIED',
+                    '1': 'LOW_AND_ABOVE',
+                    '2': 'MEDIUM_AND_ABOVE',
+                    '3': 'HIGH'
+                }
+                conf_val = config_data['pi_jb_confidence']
+                pi_jb_settings['confidenceLevel'] = conf_map.get(conf_val, 'DETECTION_CONFIDENCE_LEVEL_UNSPECIFIED')
+                
+            filter_config['piAndJailbreakFilterSettings'] = pi_jb_settings
+            update_mask.append('filterConfig.piAndJailbreakFilterSettings')
+            
         if 'malicious_uris' in config_data:
-            filter_config_dict['malicious_uri_filter_settings'] = {
-                'filter_enforcement': 1 if config_data['malicious_uris'] == 'ENABLED' else 2
+            filter_config['maliciousUriFilterSettings'] = {
+                'filterEnforcement': 'ENABLED' if config_data['malicious_uris'] == 'ENABLED' else 'DISABLED'
             }
+            update_mask.append('filterConfig.maliciousUriFilterSettings')
             
         if 'rai_filters' in config_data:
             rai_filters = []
+            # Map from int to string for RAI Filter Type
+            int_to_str_type = {
+                2: 'HATE_SPEECH',
+                3: 'DANGEROUS',
+                6: 'HARASSMENT',
+                17: 'SEXUALLY_EXPLICIT'
+            }
+            # Map from int to string for Confidence Level
+            int_to_str_conf = {
+                0: 'DETECTION_CONFIDENCE_LEVEL_UNSPECIFIED',
+                1: 'LOW_AND_ABOVE',
+                2: 'MEDIUM_AND_ABOVE',
+                3: 'HIGH'
+            }
+            
             for f in config_data['rai_filters']:
-                rai_filters.append({
-                    'filter_type': f.get('filter_type'),
-                    'confidence_level': f.get('confidence_level')
-                })
-            filter_config_dict['rai_settings'] = {'rai_filters': rai_filters}
+                f_type = f.get('filter_type')
+                c_level = f.get('confidence_level')
+                
+                str_type = int_to_str_type.get(f_type)
+                if not str_type and isinstance(f_type, str):
+                    str_type = f_type # Use string directly if already string
+                    
+                str_conf = int_to_str_conf.get(c_level)
+                if not str_conf and isinstance(c_level, str):
+                    str_conf = c_level # Use string directly if already string
+                    
+                if str_type:
+                    rai_filters.append({
+                        'filterType': str_type,
+                        'confidenceLevel': str_conf or 'DETECTION_CONFIDENCE_LEVEL_UNSPECIFIED'
+                    })
+            filter_config['raiSettings'] = {'raiFilters': rai_filters}
+            update_mask.append('filterConfig.raiSettings')
             
         if 'sdp_settings' in config_data:
             sdp_data = config_data['sdp_settings']
-            advanced_config = {}
-            if 'inspect_template' in sdp_data:
-                advanced_config['inspect_template'] = sdp_data['inspect_template']
-            if 'deidentify_template' in sdp_data:
-                advanced_config['deidentify_template'] = sdp_data['deidentify_template']
-            filter_config_dict['sdp_settings'] = {'advanced_config': advanced_config}
+            sdp_config = {}
+            
+            if sdp_data.get('mode') == 'Basic':
+                sdp_config['basicConfig'] = {'filterEnforcement': 'ENABLED'}
+                sdp_config['advancedConfig'] = None
+            elif sdp_data.get('mode') == 'Advanced':
+                advanced_config = {}
+                if 'inspect_template' in sdp_data:
+                    inspect_template = sdp_data['inspect_template']
+                    if inspect_template and not inspect_template.startswith('projects/'):
+                        inspect_template = f"projects/{project}/locations/{location}/inspectTemplates/{inspect_template}"
+                    advanced_config['inspectTemplate'] = inspect_template
+                    
+                if 'deidentify_template' in sdp_data:
+                    deidentify_template = sdp_data['deidentify_template']
+                    if deidentify_template and not deidentify_template.startswith('projects/'):
+                        deidentify_template = f"projects/{project}/locations/{location}/deidentifyTemplates/{deidentify_template}"
+                    advanced_config['deidentifyTemplate'] = deidentify_template
+                sdp_config['advancedConfig'] = advanced_config
+            else:
+                sdp_config['basicConfig'] = {'filterEnforcement': 'DISABLED'}
+                sdp_config['advancedConfig'] = None
+                
+            filter_config['sdpSettings'] = sdp_config
+            update_mask.append('filterConfig.sdpSettings')
 
-        template.filter_config = modelarmor_v1.FilterConfig(filter_config_dict)
+        if filter_config:
+            payload['filterConfig'] = filter_config
 
+        template_metadata = {}
         if 'logging_enabled' in config_data:
-            template.template_metadata = modelarmor_v1.TemplateMetadata(
-                log_template_operations=bool(config_data['logging_enabled'])
-            )
+            logging_val = bool(config_data['logging_enabled'])
+            template_metadata['logTemplateOperations'] = logging_val
+            template_metadata['logSanitizeOperations'] = logging_val
+            update_mask.append('templateMetadata.logTemplateOperations')
+            update_mask.append('templateMetadata.logSanitizeOperations')
+        if template_metadata:
+            payload['templateMetadata'] = template_metadata
 
-        # Update request
-        request_obj = modelarmor_v1.UpdateTemplateRequest(
-            template=template
-        )
+        # Make direct REST API call
+        import google.auth
+        from google.auth.transport.requests import Request
+        import requests
         
-        updated_template = client.update_template(request=request_obj)
+        credentials, _ = google.auth.default()
+        credentials.refresh(Request())
+        token = credentials.token
         
+        url = f"https://{endpoint_info['endpoint']}/v1/{name}"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        
+        if update_mask:
+            url += f"?updateMask={','.join(update_mask)}"
+            
+        print(f"Patching template to {url}...", flush=True)
+        print(f"Payload: {payload}", flush=True)
+        
+        resp = requests.patch(url, headers=headers, json=payload)
+        print(f"Patch status: {resp.status_code}", flush=True)
+        
+        if resp.status_code != 200:
+            print(f"Failed to update template: {resp.text}", flush=True)
+            return jsonify({'error': f"Failed to update template: {resp.text}"}), resp.status_code
+            
         # Clear cache for this location
         cache_key = f"templates_{location}"
         if cache_key in template_cache:
             del template_cache[cache_key]
+            
+        # Clear Model Armor cache for this template
+        keys_to_delete = [k for k in model_armor_cache if k.endswith(f"_{template_name}_{location}")]
+        for k in keys_to_delete:
+            del model_armor_cache[k]
             
         return jsonify({'status': 'success', 'message': f'Template {template_name} updated successfully'})
 
@@ -940,31 +1038,14 @@ def chat():
         use_default_response = request.form.get('useDefaultResponse') == 'true'
         system_instruction = request.form.get('systemInstruction', '')
         
-        # Generate a cache key based on filename and file size
-        file.seek(0, 2)  # Seek to end
-        file_size = file.tell()
-        file.seek(0)  # Seek back to start
-        file_cache_key = f"{file.filename}_{file_size}"
+        # Security Check: Enforce file extensions
+        if not allowed_file(file.filename):
+            return jsonify({'error': f'File type not allowed. Allowed types: {", ".join(ALLOWED_EXTENSIONS)}'}), 400
+            
+        # Security Check: Sanitize filename
+        file.filename = secure_filename(file.filename)
         
-        # Check if we have this file cached
-        if file_cache_key in file_cache:
-            cached_data, timestamp = file_cache[file_cache_key]
-            if time.time() - timestamp < CACHE_TTL:
-                file_data_base64 = cached_data['base64_data']
-                mime_type = cached_data['mime_type']
-                print(f"INFO: Using cached file data for {file.filename}")
-            else:
-                del file_cache[file_cache_key]
-                file_content = file.read()
-                file_data_base64 = base64.b64encode(file_content).decode('utf-8')
-                mime_type = mimetypes.guess_type(file.filename)[0]
-                file_cache[file_cache_key] = ({'base64_data': file_data_base64, 'mime_type': mime_type}, time.time())
-        else:
-            file_content = file.read()
-            file_data_base64 = base64.b64encode(file_content).decode('utf-8')
-            mime_type = mimetypes.guess_type(file.filename)[0]
-            # Cache the file data
-            file_cache[file_cache_key] = ({'base64_data': file_data_base64, 'mime_type': mime_type}, time.time())
+        file_data_base64, mime_type = get_file_data(file)
         
         file_data = {
             'base64_data': file_data_base64,

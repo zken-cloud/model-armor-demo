@@ -279,6 +279,14 @@
             border: 1px solid #e8eaed;
         }
 
+        .bot-message h1, .bot-message h2, .bot-message h3, .bot-message h4, .bot-message h5, .bot-message h6 {
+            color: inherit;
+            font-size: 1.1rem;
+            font-weight: bold;
+            margin-top: 0.5rem;
+            margin-bottom: 0.25rem;
+        }
+
         .title-section {
             display: flex;
             align-items: center;
@@ -725,7 +733,7 @@
                     <select class="form-select" id="modelSelect" onchange="checkFileSupport()">
                         <option value="">Select a model</option>
                         {% for model in foundation_models %}
-                        <option value="{{ model.display_name }}" data-provider="{{ model.provider }}">{{
+                        <option value="{{ model.display_name }}" data-provider="{{ model.provider }}" {% if model.name == 'gemini-3.1-flash-lite-preview' %}selected{% endif %}>{{
                             model.display_name }} ({{model.provider}})</option>
                         {% endfor %}
                     </select>
@@ -906,9 +914,16 @@
                                         
                                         <div class="mb-3">
                                             <label class="form-label">Prompt Injection & Jailbreak</label>
-                                            <select class="form-select" id="customPiJailbreak">
+                                            <select class="form-select mb-2" id="customPiJailbreak">
                                                 <option value="ENABLED">Enabled</option>
                                                 <option value="DISABLED">Disabled</option>
+                                            </select>
+                                            <label class="form-label sm">Confidence Level</label>
+                                            <select class="form-select form-select-sm" id="customPiJailbreakConfidence">
+                                                <option value="0">Unspecified</option>
+                                                <option value="1">Low</option>
+                                                <option value="2">Medium</option>
+                                                <option value="3">High</option>
                                             </select>
                                         </div>
                                         
@@ -919,18 +934,9 @@
                                                 <option value="DISABLED">Disabled</option>
                                             </select>
                                         </div>
-
-                                        <hr>
-                                        <h6>RAI Filters</h6>
-                                        <div class="mb-2">
-                                            <label class="form-label sm">Prompt Injection</label>
-                                            <select class="form-select form-select-sm rai-filter" data-type="1">
-                                                <option value="0">Unspecified</option>
-                                                <option value="1">Low</option>
-                                                <option value="2">Medium</option>
-                                                <option value="3">High</option>
-                                            </select>
-                                        </div>
+                                        
+                                         <hr>
+                                         <h6>RAI Filters</h6>
                                         <div class="mb-2">
                                             <label class="form-label sm">Hate Speech</label>
                                             <select class="form-select form-select-sm rai-filter" data-type="2">
@@ -968,15 +974,27 @@
                                             </select>
                                         </div>
 
+
                                         <hr>
-                                        <h6>SDP Settings (Advanced)</h6>
+                                        <h6>SDP Settings</h6>
                                         <div class="mb-2">
-                                            <label class="form-label sm">Inspect Template</label>
-                                            <input type="text" class="form-control form-control-sm" id="customInspectTemplate" placeholder="projects/.../inspectTemplates/...">
+                                            <label class="form-label sm">SDP Mode</label>
+                                            <select class="form-select form-select-sm" id="customSdpMode" onchange="toggleSdpFields()">
+                                                <option value="None">None</option>
+                                                <option value="Basic">Basic</option>
+                                                <option value="Advanced">Advanced</option>
+                                            </select>
                                         </div>
-                                        <div class="mb-2">
-                                            <label class="form-label sm">Deidentify Template</label>
-                                            <input type="text" class="form-control form-control-sm" id="customDeidentifyTemplate" placeholder="projects/.../deidentifyTemplates/...">
+
+                                        <div id="sdpAdvancedFields" style="display: none;">
+                                            <div class="mb-2">
+                                                <label class="form-label sm">Inspect Template</label>
+                                                <input type="text" class="form-control form-control-sm" id="customInspectTemplate" placeholder="projects/.../inspectTemplates/...">
+                                            </div>
+                                            <div class="mb-2">
+                                                <label class="form-label sm">Deidentify Template</label>
+                                                <input type="text" class="form-control form-control-sm" id="customDeidentifyTemplate" placeholder="projects/.../deidentifyTemplates/...">
+                                            </div>
                                         </div>
                                     </form>
                                 </div>
@@ -1209,8 +1227,6 @@
                 
                 // Malicious URL
                 const hasMalUrls = config.detection_filters && config.detection_filters.some(f => f.includes('Malicious URL'));
-                configHTML += `<li>Malicious URL: ${hasMalUrls ? 'Enabled' : 'Disabled'}</li>`;
-                
                 configHTML += '</ul></div>';
  
                 // Display SDP Settings
@@ -1873,6 +1889,17 @@
             openCustomizationModal('response');
         });
 
+        function toggleSdpFields() {
+            const mode = document.getElementById('customSdpMode').value;
+            const advancedFields = document.getElementById('sdpAdvancedFields');
+            
+            if (mode === 'Advanced') {
+                advancedFields.style.display = 'block';
+            } else {
+                advancedFields.style.display = 'none';
+            }
+        }
+
         function openCustomizationModal(type) {
             const selectElement = document.getElementById(`${type}Template`);
             const templateName = selectElement.value;
@@ -1902,6 +1929,9 @@
                     const hasPiJb = config.detection_filters && config.detection_filters.some(f => f.includes('Prompt Injection & Jailbreak'));
                     document.getElementById('customPiJailbreak').value = hasPiJb ? 'ENABLED' : 'DISABLED';
                     
+                    const piJbConfidence = config.other_settings?.pi_jb_confidence || 0;
+                    document.getElementById('customPiJailbreakConfidence').value = piJbConfidence;
+                    
                     const hasMalUrls = config.detection_filters && config.detection_filters.some(f => f.includes('Malicious URL'));
                     document.getElementById('customMaliciousUrls').value = hasMalUrls ? 'ENABLED' : 'DISABLED';
 
@@ -1920,8 +1950,16 @@
                     }
 
                     // Populate SDP settings
+                    let sdpMode = config.sdp_settings?.mode || 'None';
+                    if (sdpMode === 'Advanced (DLP)') sdpMode = 'Advanced';
+                    document.getElementById('customSdpMode').value = sdpMode;
+                    
+
+                    
                     document.getElementById('customInspectTemplate').value = config.sdp_settings?.inspect_template || '';
                     document.getElementById('customDeidentifyTemplate').value = config.sdp_settings?.deidentify_template || '';
+                    
+                    toggleSdpFields();
                 }
             }
 
@@ -1933,6 +1971,7 @@
             const location = document.getElementById('customLocation').value;
             const piJailbreak = document.getElementById('customPiJailbreak').value;
             const maliciousUrls = document.getElementById('customMaliciousUrls').value;
+            const piJbConfidence = document.getElementById('customPiJailbreakConfidence').value;
 
             const raiFilters = [];
             document.querySelectorAll('.rai-filter').forEach(select => {
@@ -1942,14 +1981,20 @@
                 });
             });
 
+            const sdpMode = document.getElementById('customSdpMode').value;
             const sdpSettings = {
-                inspect_template: document.getElementById('customInspectTemplate').value,
-                deidentify_template: document.getElementById('customDeidentifyTemplate').value
+                mode: sdpMode
             };
+
+            if (sdpMode === 'Advanced') {
+                sdpSettings.inspect_template = document.getElementById('customInspectTemplate').value;
+                sdpSettings.deidentify_template = document.getElementById('customDeidentifyTemplate').value;
+            }
 
             const config = {
                 pi_and_jailbreak: piJailbreak,
                 malicious_uris: maliciousUrls,
+                pi_jb_confidence: piJbConfidence,
                 rai_filters: raiFilters,
                 sdp_settings: sdpSettings
             };
@@ -1973,7 +2018,7 @@
                 }
 
                 alert(data.message);
-                templateCustomizationModal.hide();
+                // templateCustomizationModal.hide(); // Keep modal open after save
                 
                 // Refresh templates to get updated config
                 templateCache.delete(location);
