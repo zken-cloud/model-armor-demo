@@ -981,10 +981,10 @@
                                             </select>
                                             <label class="form-label sm">Confidence Level</label>
                                             <select class="form-select form-select-sm" id="customPiJailbreakConfidence">
-                                                <option value="0">Unspecified</option>
-                                                <option value="1">Low</option>
-                                                <option value="2">Medium</option>
-                                                <option value="3">High</option>
+                                                <option value="DETECTION_CONFIDENCE_LEVEL_UNSPECIFIED">Unspecified</option>
+                                                <option value="LOW_AND_ABOVE">Low and above</option>
+                                                <option value="MEDIUM_AND_ABOVE">Medium and above</option>
+                                                <option value="HIGH">High and above</option>
                                             </select>
                                         </div>
                                         
@@ -1000,38 +1000,38 @@
                                          <h6>RAI Filters</h6>
                                         <div class="mb-2">
                                             <label class="form-label sm">Hate Speech</label>
-                                            <select class="form-select form-select-sm rai-filter" data-type="2">
-                                                <option value="0">Unspecified</option>
-                                                <option value="1">Low</option>
-                                                <option value="2">Medium</option>
-                                                <option value="3">High</option>
+                                            <select class="form-select form-select-sm rai-filter" data-type="HATE_SPEECH">
+                                                <option value="DETECTION_CONFIDENCE_LEVEL_UNSPECIFIED">Unspecified</option>
+                                                <option value="LOW_AND_ABOVE">Low and above</option>
+                                                <option value="MEDIUM_AND_ABOVE">Medium and above</option>
+                                                <option value="HIGH">High and above</option>
                                             </select>
                                         </div>
                                         <div class="mb-2">
                                             <label class="form-label sm">Dangerous Content</label>
-                                            <select class="form-select form-select-sm rai-filter" data-type="3">
-                                                <option value="0">Unspecified</option>
-                                                <option value="1">Low</option>
-                                                <option value="2">Medium</option>
-                                                <option value="3">High</option>
+                                            <select class="form-select form-select-sm rai-filter" data-type="DANGEROUS">
+                                                <option value="DETECTION_CONFIDENCE_LEVEL_UNSPECIFIED">Unspecified</option>
+                                                <option value="LOW_AND_ABOVE">Low and above</option>
+                                                <option value="MEDIUM_AND_ABOVE">Medium and above</option>
+                                                <option value="HIGH">High and above</option>
                                             </select>
                                         </div>
                                         <div class="mb-2">
                                             <label class="form-label sm">Harassment</label>
-                                            <select class="form-select form-select-sm rai-filter" data-type="6">
-                                                <option value="0">Unspecified</option>
-                                                <option value="1">Low</option>
-                                                <option value="2">Medium</option>
-                                                <option value="3">High</option>
+                                            <select class="form-select form-select-sm rai-filter" data-type="HARASSMENT">
+                                                <option value="DETECTION_CONFIDENCE_LEVEL_UNSPECIFIED">Unspecified</option>
+                                                <option value="LOW_AND_ABOVE">Low and above</option>
+                                                <option value="MEDIUM_AND_ABOVE">Medium and above</option>
+                                                <option value="HIGH">High and above</option>
                                             </select>
                                         </div>
                                         <div class="mb-2">
                                             <label class="form-label sm">Sexually Explicit</label>
-                                            <select class="form-select form-select-sm rai-filter" data-type="17">
-                                                <option value="0">Unspecified</option>
-                                                <option value="1">Low</option>
-                                                <option value="2">Medium</option>
-                                                <option value="3">High</option>
+                                            <select class="form-select form-select-sm rai-filter" data-type="SEXUALLY_EXPLICIT">
+                                                <option value="DETECTION_CONFIDENCE_LEVEL_UNSPECIFIED">Unspecified</option>
+                                                <option value="LOW_AND_ABOVE">Low and above</option>
+                                                <option value="MEDIUM_AND_ABOVE">Medium and above</option>
+                                                <option value="HIGH">High and above</option>
                                             </select>
                                         </div>
 
@@ -2031,7 +2031,8 @@
                     const hasPiJb = config.detection_filters && config.detection_filters.some(f => f.includes('Prompt Injection & Jailbreak'));
                     document.getElementById('customPiJailbreak').value = hasPiJb ? 'ENABLED' : 'DISABLED';
                     
-                    const piJbConfidence = config.other_settings?.pi_jb_confidence || 0;
+                    const piJbConfidence = config.other_settings?.pi_jb_confidence
+                        || 'DETECTION_CONFIDENCE_LEVEL_UNSPECIFIED';
                     document.getElementById('customPiJailbreakConfidence').value = piJbConfidence;
                     
                     const hasMalUrls = config.detection_filters && config.detection_filters.some(f => f.includes('Malicious URL'));
@@ -2041,13 +2042,12 @@
                     if (config.rai_filters_structured) {
                         const raiFilters = document.querySelectorAll('.rai-filter');
                         raiFilters.forEach(select => {
-                            const type = parseInt(select.getAttribute('data-type'));
-                            const filter = config.rai_filters_structured.find(f => f.filter_type === type);
-                            if (filter) {
-                                select.value = filter.confidence_level;
-                            } else {
-                                select.value = "0";
-                            }
+                            const type = select.getAttribute('data-type');
+                            // filter_type and confidence_level are the API's enum names.
+                            const filter = config.rai_filters_structured.find(
+                                f => String(f.filter_type) === type);
+                            select.value = filter ? String(filter.confidence_level)
+                                                  : 'DETECTION_CONFIDENCE_LEVEL_UNSPECIFIED';
                         });
                     }
 
@@ -2081,8 +2081,8 @@
             const raiFilters = [];
             document.querySelectorAll('.rai-filter').forEach(select => {
                 raiFilters.push({
-                    filter_type: parseInt(select.getAttribute('data-type')),
-                    confidence_level: parseInt(select.value)
+                    filter_type: select.getAttribute('data-type'),
+                    confidence_level: select.value
                 });
             });
 

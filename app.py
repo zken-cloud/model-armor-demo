@@ -524,7 +524,11 @@ def serialize_template(template):
                 if rai_filters:
                     for rai_filter in rai_filters:
                         filter_type_val = get_field(rai_filter, 'filterType') or get_field(rai_filter, 'filter_type', 0)
-                        confidence_val = get_field(rai_filter, 'confidenceLevel') or get_field(rai_filter, 'confidence_level', 0)
+                        # An absent confidenceLevel means unspecified; report it as such
+                        # so the editor shows the real setting instead of a blank default.
+                        confidence_val = (get_field(rai_filter, 'confidenceLevel')
+                                          or get_field(rai_filter, 'confidence_level')
+                                          or UNSPECIFIED_CONFIDENCE)
                         
                         # Map to readable names
                         display_type = FILTER_TYPE_MAP.get(filter_type_val, f'Unknown Filter ({filter_type_val})')
@@ -542,7 +546,9 @@ def serialize_template(template):
             pi_jb = get_field(filter_config, 'piAndJailbreakFilterSettings') or get_field(filter_config, 'pi_and_jailbreak_filter_settings')
             if pi_jb:
                 enforcement = get_field(pi_jb, 'filterEnforcement') or get_field(pi_jb, 'filter_enforcement', 0)
-                confidence_val = get_field(pi_jb, 'confidenceLevel') or get_field(pi_jb, 'confidence_level', 0)
+                confidence_val = (get_field(pi_jb, 'confidenceLevel')
+                                  or get_field(pi_jb, 'confidence_level')
+                                  or UNSPECIFIED_CONFIDENCE)
                 
                 # Store raw confidence value for UI
                 config['other_settings']['pi_jb_confidence'] = confidence_val
@@ -833,6 +839,30 @@ def validate_template_name(template_name):
     if not template_name or not TEMPLATE_NAME_PATTERN.match(template_name):
         raise ValueError(f"Invalid template name: {template_name!r}")
     return template_name
+
+RAI_FILTER_TYPES_BY_INT = {2: 'HATE_SPEECH', 3: 'DANGEROUS', 6: 'HARASSMENT', 17: 'SEXUALLY_EXPLICIT'}
+CONFIDENCE_LEVELS_BY_INT = {
+    0: UNSPECIFIED_CONFIDENCE, 1: 'LOW_AND_ABOVE', 2: 'MEDIUM_AND_ABOVE', 3: 'HIGH',
+}
+VALID_CONFIDENCE_LEVELS = set(CONFIDENCE_LEVELS_BY_INT.values())
+
+def normalize_confidence(value):
+    """Accept an enum name, or the legacy 0-3 index, and return the enum name."""
+    if isinstance(value, str) and value in VALID_CONFIDENCE_LEVELS:
+        return value
+    try:
+        return CONFIDENCE_LEVELS_BY_INT[int(value)]
+    except (TypeError, ValueError, KeyError):
+        return UNSPECIFIED_CONFIDENCE
+
+def normalize_rai_filter_type(value):
+    """Accept an enum name, or the legacy int, and return the enum name."""
+    if isinstance(value, str) and value in RAI_FILTER_TYPES_BY_INT.values():
+        return value
+    try:
+        return RAI_FILTER_TYPES_BY_INT.get(int(value))
+    except (TypeError, ValueError):
+        return None
 
 def get_template_path(template_name, location):
     return f"projects/{project}/locations/{location}/templates/{validate_template_name(template_name)}"
@@ -1379,18 +1409,7 @@ def update_template():
             }
             
             if 'pi_jb_confidence' in config_data:
-                conf_map = {
-                    0: 'DETECTION_CONFIDENCE_LEVEL_UNSPECIFIED',
-                    1: 'LOW_AND_ABOVE',
-                    2: 'MEDIUM_AND_ABOVE',
-                    3: 'HIGH',
-                    '0': 'DETECTION_CONFIDENCE_LEVEL_UNSPECIFIED',
-                    '1': 'LOW_AND_ABOVE',
-                    '2': 'MEDIUM_AND_ABOVE',
-                    '3': 'HIGH'
-                }
-                conf_val = config_data['pi_jb_confidence']
-                pi_jb_settings['confidenceLevel'] = conf_map.get(conf_val, 'DETECTION_CONFIDENCE_LEVEL_UNSPECIFIED')
+                pi_jb_settings['confidenceLevel'] = normalize_confidence(config_data['pi_jb_confidence'])
                 
             filter_config['piAndJailbreakFilterSettings'] = pi_jb_settings
             update_mask.append('filterConfig.piAndJailbreakFilterSettings')
@@ -1403,37 +1422,12 @@ def update_template():
             
         if 'rai_filters' in config_data:
             rai_filters = []
-            # Map from int to string for RAI Filter Type
-            int_to_str_type = {
-                2: 'HATE_SPEECH',
-                3: 'DANGEROUS',
-                6: 'HARASSMENT',
-                17: 'SEXUALLY_EXPLICIT'
-            }
-            # Map from int to string for Confidence Level
-            int_to_str_conf = {
-                0: 'DETECTION_CONFIDENCE_LEVEL_UNSPECIFIED',
-                1: 'LOW_AND_ABOVE',
-                2: 'MEDIUM_AND_ABOVE',
-                3: 'HIGH'
-            }
-            
             for f in config_data['rai_filters']:
-                f_type = f.get('filter_type')
-                c_level = f.get('confidence_level')
-                
-                str_type = int_to_str_type.get(f_type)
-                if not str_type and isinstance(f_type, str):
-                    str_type = f_type # Use string directly if already string
-                    
-                str_conf = int_to_str_conf.get(c_level)
-                if not str_conf and isinstance(c_level, str):
-                    str_conf = c_level # Use string directly if already string
-                    
+                str_type = normalize_rai_filter_type(f.get('filter_type'))
                 if str_type:
                     rai_filters.append({
                         'filterType': str_type,
-                        'confidenceLevel': str_conf or 'DETECTION_CONFIDENCE_LEVEL_UNSPECIFIED'
+                        'confidenceLevel': normalize_confidence(f.get('confidence_level')),
                     })
             filter_config['raiSettings'] = {'raiFilters': rai_filters}
             update_mask.append('filterConfig.raiSettings')
