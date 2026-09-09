@@ -886,7 +886,7 @@
                                         <li><strong>Responsible AI</strong>: Hate Speech, Dangerous Content, Harassment, Sexually Explicit. All default to <strong>High and above</strong>, so mild content deliberately passes. Lower a threshold to Low or Medium to see it trigger more readily.</li>
                                         <li><strong>Detection</strong>: Prompt Injection &amp; Jailbreak, and Malicious URLs.</li>
                                         <li><strong>Sensitive Data Protection</strong>: Basic, or Advanced with inspect / de-identify templates. Those two fields are dropdowns listing the templates that exist in the selected region &mdash; hover one to see the infoTypes that trigger it.
-                                            <br><strong class="text-danger">Advanced SDP and image screening cannot be combined.</strong> With a DLP template configured, Model Armor skips every filter on an image and the app blocks the request. Advanced SDP still works for text, including redaction, so use <strong>Basic</strong> when demonstrating images.</li>
+                                            <br><strong class="text-danger">A De-identify template disables image screening.</strong> With one set, Model Armor skips every filter on an image and the app blocks the request. An <em>Inspect</em> template on its own is fine &mdash; it screens images normally and reports findings such as a credit card number read out of the picture. De-identification is unaffected for text, so leave De-identify empty when demonstrating images and set it when demonstrating redaction.</li>
                                     </ul>
                                     <p class="mb-4">Templates use the <strong>latest</strong> filter model (currently v3). The version actually used is shown under the analysis panel.</p>
 
@@ -1050,10 +1050,11 @@
 
                                         <div id="sdpImageWarning" class="alert alert-danger py-2 px-2 mb-2"
                                              style="display:none; font-size:0.75rem;">
-                                            <strong>Advanced SDP disables image screening.</strong>
-                                            With a DLP inspect/de-identify template configured, Model Armor skips every
-                                            filter on images and returns invocationResult=FAILURE. Text screening still
-                                            works, including redaction. Use <strong>Basic</strong> for image demos.
+                                            <strong>A De-identify template disables image screening.</strong>
+                                            With one set, Model Armor skips every filter on images and returns
+                                            invocationResult=FAILURE. Text redaction is unaffected. Leave De-identify
+                                            empty to keep image screening &mdash; an Inspect template on its own still
+                                            inspects images.
                                         </div>
                                         <div id="sdpAdvancedFields" style="display: none;">
                                             <div id="sdpUnavailableNote" class="alert alert-warning py-2 px-2 mb-2"
@@ -1069,7 +1070,7 @@
                                             <div class="mb-2">
                                                 <label class="form-label sm">Deidentify Template</label>
                                                 <select class="form-select form-select-sm" id="customDeidentifyTemplate"
-                                                        onchange="updateDlpHover('customDeidentifyTemplate')">
+                                                        onchange="updateDlpHover('customDeidentifyTemplate'); updateSdpImageWarning()">
                                                     <option value="">Loading...</option>
                                                 </select>
                                                 <small class="text-muted dlp-hint" id="customDeidentifyTemplateHint"></small>
@@ -1493,6 +1494,7 @@
             }
             fillDlpSelect('customInspectTemplate', data.inspect_templates || [], inspectValue);
             fillDlpSelect('customDeidentifyTemplate', data.deidentify_templates || [], deidentifyValue);
+            updateSdpImageWarning();
 
             // Explain regions where advanced SDP cannot be used at all.
             const note = document.getElementById('sdpUnavailableNote');
@@ -2007,9 +2009,17 @@
             const imageWarning = document.getElementById('sdpImageWarning');
 
             advancedFields.style.display = mode === 'Advanced' ? 'block' : 'none';
-            if (imageWarning) {
-                imageWarning.style.display = mode === 'Advanced' ? 'block' : 'none';
-            }
+            updateSdpImageWarning();
+        }
+
+        // Only a de-identify template breaks image screening; inspect alone is fine.
+        function updateSdpImageWarning() {
+            const warning = document.getElementById('sdpImageWarning');
+            if (!warning) return;
+            const advanced = document.getElementById('customSdpMode').value === 'Advanced';
+            const deidentify = document.getElementById('customDeidentifyTemplate');
+            const hasDeidentify = !!(deidentify && deidentify.value);
+            warning.style.display = advanced && hasDeidentify ? 'block' : 'none';
         }
 
         async function openCustomizationModal(type) {
