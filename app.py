@@ -57,28 +57,56 @@ def get_cached_auth_token():
     return credentials.token
 
 # Add allowed file extensions
-ALLOWED_EXTENSIONS = {
+DOCUMENT_EXTENSIONS = {
     'pdf', 'docx', 'docm', 'dotx', 'dotm',
     'pptx', 'pptm', 'potx', 'pot',
     'xlsx', 'xlsm', 'xltx', 'xltm'
 }
+# Model Armor image screening accepts JPEG, PNG and BMP only.
+IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'bmp'}
+ALLOWED_EXTENSIONS = DOCUMENT_EXTENSIONS | IMAGE_EXTENSIONS
+
+IMAGE_MIME_TYPES = {'image/png', 'image/jpeg', 'image/bmp'}
+
+# Model Armor rejects images over 4MB.
+MAX_IMAGE_BYTES = 4 * 1024 * 1024
 
 def allowed_file(filename):
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+def is_image_mime(mime_type):
+    return mime_type in IMAGE_MIME_TYPES
+
 def get_byte_data_type(mime_type):
-    """Convert MIME type to Model Armor byteDataType"""
+    """Convert MIME type to Model Armor byteDataType. Returns None if unsupported."""
     mime_to_type = {
         'application/pdf': 'PDF',
-        'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'DOCX',
-        'application/msword': 'DOC',
-        'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'PPTX',
-        'application/vnd.ms-powerpoint': 'PPT',
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'XLSX',
-        'application/vnd.ms-excel': 'XLS'
+        # Word
+        'application/msword': 'WORD_DOCUMENT',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'WORD_DOCUMENT',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.template': 'WORD_DOCUMENT',
+        'application/vnd.ms-word.document.macroEnabled.12': 'WORD_DOCUMENT',
+        'application/vnd.ms-word.template.macroEnabled.12': 'WORD_DOCUMENT',
+        # PowerPoint
+        'application/vnd.ms-powerpoint': 'POWERPOINT_DOCUMENT',
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'POWERPOINT_DOCUMENT',
+        'application/vnd.openxmlformats-officedocument.presentationml.template': 'POWERPOINT_DOCUMENT',
+        'application/vnd.ms-powerpoint.presentation.macroEnabled.12': 'POWERPOINT_DOCUMENT',
+        # Excel
+        'application/vnd.ms-excel': 'EXCEL_DOCUMENT',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'EXCEL_DOCUMENT',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.template': 'EXCEL_DOCUMENT',
+        'application/vnd.ms-excel.sheet.macroEnabled.12': 'EXCEL_DOCUMENT',
+        'application/vnd.ms-excel.template.macroEnabled.12': 'EXCEL_DOCUMENT',
+        # Images and plain text
+        'image/png': 'IMAGE',
+        'image/jpeg': 'IMAGE',
+        'image/bmp': 'IMAGE',
+        'text/plain': 'TXT',
+        'text/csv': 'CSV',
     }
-    return mime_to_type.get(mime_type, 'PDF')
+    return mime_to_type.get(mime_type)
 
 # --- Optimized HTTP Client ---
 class OptimizedHTTPClient:
@@ -213,11 +241,15 @@ def pre_initialize_clients():
     print("INFO: All API clients pre-initialization complete.")
 
 
+# Image screening is only available in the us and eu multi-regions; regional
+# endpoints return invocationResult=FAILURE for IMAGE payloads.
 model_armor_endpoints = [
-    {"location": "us-central1", "endpoint": "modelarmor.us-central1.rep.googleapis.com", "display_name": "us-central1"},
-    {"location": "us-east1", "endpoint": "modelarmor.us-east1.rep.googleapis.com", "display_name": "us-east1"},
-    {"location": "europe-west4", "endpoint": "modelarmor.europe-west4.rep.googleapis.com", "display_name": "europe-west4"},
-    {"location": "asia-southeast1", "endpoint": "modelarmor.asia-southeast1.rep.googleapis.com", "display_name": "asia-southeast1"},
+    {"location": "us", "endpoint": "modelarmor.us.rep.googleapis.com", "display_name": "us (multi-region)", "supports_images": True},
+    {"location": "eu", "endpoint": "modelarmor.eu.rep.googleapis.com", "display_name": "eu (multi-region)", "supports_images": True},
+    {"location": "us-central1", "endpoint": "modelarmor.us-central1.rep.googleapis.com", "display_name": "us-central1", "supports_images": False},
+    {"location": "us-east1", "endpoint": "modelarmor.us-east1.rep.googleapis.com", "display_name": "us-east1", "supports_images": False},
+    {"location": "europe-west4", "endpoint": "modelarmor.europe-west4.rep.googleapis.com", "display_name": "europe-west4", "supports_images": False},
+    {"location": "asia-southeast1", "endpoint": "modelarmor.asia-southeast1.rep.googleapis.com", "display_name": "asia-southeast1", "supports_images": False},
 ]
 
 generation_config = types.GenerateContentConfig(
@@ -231,38 +263,170 @@ generation_config = types.GenerateContentConfig(
 )
 
 foundation_models = [
-    {"name": "gemini-3.1-flash-lite-preview", "provider": "Google", "location": "global", "display_name": "gemini-3.1-flash-lite-preview"},
-    {"name": "gemini-3.1-pro-preview", "provider": "Google", "location": "global", "display_name": "gemini-3.1-pro-preview"},
+    {"name": "gemini-3.8-flash", "provider": "Google", "location": "global", "display_name": "gemini-3.8-flash"},
 ]
+
+# Demo template defaults: every filter at "High and above", the latest filter
+# model for PI/Jailbreak (and RAI), and both modalities where images are supported.
+DEFAULT_CONFIDENCE_LEVEL = 'HIGH'
+DEFAULT_FILTER_VERSION_ALIAS = 'FILTER_VERSION_ALIAS_LATEST'
+DEFAULT_RAI_FILTER_TYPES = ['HATE_SPEECH', 'DANGEROUS', 'HARASSMENT', 'SEXUALLY_EXPLICIT']
+
+def build_default_template_payload(supports_images):
+    """Default demo template body. filterVersionSelector is REST-only (absent from the SDK)."""
+    modalities = ['MODALITY_TEXT']
+    if supports_images:
+        modalities.append('MODALITY_IMAGE')
+
+    return {
+        'filterConfig': {
+            'raiSettings': {
+                'raiFilters': [
+                    {'filterType': f, 'confidenceLevel': DEFAULT_CONFIDENCE_LEVEL}
+                    for f in DEFAULT_RAI_FILTER_TYPES
+                ]
+            },
+            'piAndJailbreakFilterSettings': {
+                'filterEnforcement': 'ENABLED',
+                'confidenceLevel': DEFAULT_CONFIDENCE_LEVEL,
+            },
+            'maliciousUriFilterSettings': {'filterEnforcement': 'ENABLED'},
+            'sdpSettings': {'basicConfig': {'filterEnforcement': 'ENABLED'}},
+        },
+        'templateMetadata': {
+            'modalities': modalities,
+            'filterVersionSelector': {'alias': DEFAULT_FILTER_VERSION_ALIAS},
+            'logTemplateOperations': True,
+            'logSanitizeOperations': True,
+        },
+    }
+
+def extract_unsupported_capabilities(resp):
+    """Capability names from a CAPABILITY_NOT_SUPPORTED error, e.g. {'Malicious URI filter'}."""
+    try:
+        for detail in resp.json().get('error', {}).get('details', []):
+            if detail.get('reason') == 'CAPABILITY_NOT_SUPPORTED':
+                raw = detail.get('metadata', {}).get('invalid_capabilities', '')
+                return {c.strip() for c in raw.split(',') if c.strip()}
+    except (ValueError, AttributeError):
+        pass
+    return set()
+
+def reconcile_demo_template(base_url, template_id, existing, supports_images, headers):
+    """Bring an existing demo template up to the demo defaults.
+
+    Only touches the fields the demo owns (RAI confidence, PI/Jailbreak, filter
+    version, modalities). SDP and malicious-URI settings are left alone so any
+    per-region customisation survives a restart.
+    """
+    defaults = build_default_template_payload(supports_images)
+    existing_filters = existing.get('filterConfig', {})
+    existing_meta = existing.get('templateMetadata', {})
+    filter_config, metadata, update_mask = {}, {}, []
+
+    rai_filters = existing_filters.get('raiSettings', {}).get('raiFilters', [])
+    if not rai_filters or any(f.get('confidenceLevel') != DEFAULT_CONFIDENCE_LEVEL for f in rai_filters):
+        filter_config['raiSettings'] = defaults['filterConfig']['raiSettings']
+        update_mask.append('filterConfig.raiSettings')
+
+    pi_jb = existing_filters.get('piAndJailbreakFilterSettings', {})
+    if (pi_jb.get('confidenceLevel') != DEFAULT_CONFIDENCE_LEVEL
+            or pi_jb.get('filterEnforcement') != 'ENABLED'):
+        filter_config['piAndJailbreakFilterSettings'] = defaults['filterConfig']['piAndJailbreakFilterSettings']
+        update_mask.append('filterConfig.piAndJailbreakFilterSettings')
+
+    if existing_meta.get('filterVersionSelector', {}).get('alias') != DEFAULT_FILTER_VERSION_ALIAS:
+        metadata['filterVersionSelector'] = defaults['templateMetadata']['filterVersionSelector']
+        update_mask.append('templateMetadata.filterVersionSelector')
+
+    wanted_modalities = defaults['templateMetadata']['modalities']
+    if list(existing_meta.get('modalities', [])) != wanted_modalities:
+        metadata['modalities'] = wanted_modalities
+        update_mask.append('templateMetadata.modalities')
+
+    if not update_mask:
+        return None
+
+    payload = {}
+    if filter_config:
+        payload['filterConfig'] = filter_config
+    if metadata:
+        payload['templateMetadata'] = metadata
+
+    def patch():
+        return http_client.session.patch(
+            f"{base_url}/{template_id}?updateMask={','.join(update_mask)}",
+            headers=headers, json=payload, timeout=(5, 30)
+        )
+
+    resp = patch()
+    # A PATCH validates the whole template, so capabilities a region has since
+    # dropped block the update even when we are not touching them. Drop those
+    # and retry once.
+    if resp.status_code == 400:
+        unsupported = extract_unsupported_capabilities(resp)
+        if 'Malicious URI filter' in unsupported:
+            # A disabled malicious-URI block still counts as "requested", so the
+            # whole filterConfig has to be rewritten without it. SDP is carried
+            # over so per-region customisation is not lost.
+            replacement = {k: v for k, v in defaults['filterConfig'].items()
+                           if k != 'maliciousUriFilterSettings'}
+            if existing_filters.get('sdpSettings'):
+                replacement['sdpSettings'] = existing_filters['sdpSettings']
+            payload['filterConfig'] = replacement
+            update_mask = [m for m in update_mask if not m.startswith('filterConfig')]
+            update_mask.append('filterConfig')
+        if 'Multi-language detection' in unsupported:
+            payload.setdefault('templateMetadata', {})['multiLanguageDetection'] = {'enableMultiLanguageDetection': False}
+            update_mask.append('templateMetadata.multiLanguageDetection')
+        if unsupported:
+            print(f"  - {template_id}: region rejects {', '.join(sorted(unsupported))}; dropping and retrying")
+            resp = patch()
+
+    return resp, update_mask
 
 def ensure_demo_templates_exist():
     print("INFO: Ensuring demo templates exist...")
     for endpoint_info in model_armor_endpoints:
         location = endpoint_info['location']
         endpoint = endpoint_info['endpoint']
+        supports_images = endpoint_info.get('supports_images', False)
         try:
-            client = get_model_armor_client(location, endpoint)
-            parent = f"projects/{project}/locations/{location}"
-            
-            request = modelarmor_v1.ListTemplatesRequest(parent=parent)
-            page_result = client.list_templates(request=request)
-            existing_names = [t.name.split('/')[-1] for t in page_result]
-            
+            token = get_cached_auth_token()
+            headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+            base_url = f"https://{endpoint}/v1/projects/{project}/locations/{location}/templates"
+
+            list_resp = http_client.session.get(base_url, headers=headers, timeout=(5, 30))
+            if list_resp.status_code != 200:
+                print(f"  - ERROR: Failed to list templates in {location}: {list_resp.text}")
+                continue
+            existing = {t.get('name', '').split('/')[-1]: t for t in list_resp.json().get('templates', [])}
+
+            payload = build_default_template_payload(supports_images)
             for template_id in ["modelarmor-demo-prompt", "modelarmor-demo-response"]:
-                if template_id not in existing_names:
-                    print(f"  - Creating {template_id} in {location}...")
-                    template = modelarmor_v1.Template()
-                    template.filter_config = modelarmor_v1.FilterConfig()
-                    
-                    create_request = modelarmor_v1.CreateTemplateRequest(
-                        parent=parent,
-                        template_id=template_id,
-                        template=template
+                if template_id in existing:
+                    outcome = reconcile_demo_template(
+                        base_url, template_id, existing[template_id], supports_images, headers
                     )
-                    client.create_template(request=create_request)
-                    print(f"  - Successfully created {template_id} in {location}")
+                    if outcome is None:
+                        print(f"  - {template_id} in {location} already matches defaults")
+                    else:
+                        resp, update_mask = outcome
+                        if resp.status_code == 200:
+                            print(f"  - Updated {template_id} in {location}: {', '.join(update_mask)}")
+                        else:
+                            print(f"  - ERROR: Failed to update {template_id} in {location}: {resp.text}")
+                    continue
+
+                print(f"  - Creating {template_id} in {location}...")
+                resp = http_client.session.post(
+                    f"{base_url}?template_id={template_id}", headers=headers, json=payload, timeout=(5, 30)
+                )
+                if resp.status_code == 200:
+                    print(f"  - Successfully created {template_id} in {location} "
+                          f"(confidence={DEFAULT_CONFIDENCE_LEVEL}, modalities={payload['templateMetadata']['modalities']})")
                 else:
-                    print(f"  - {template_id} already exists in {location}")
+                    print(f"  - ERROR: Failed to create {template_id} in {location}: {resp.text}")
         except Exception as e:
             print(f"  - ERROR: Failed to ensure templates in {location}: {e}")
 
@@ -408,7 +572,20 @@ def serialize_template(template):
             log_template_operations = get_field(template_metadata, 'logTemplateOperations') or get_field(template_metadata, 'log_template_operations')
             if log_template_operations is not None:
                 config['other_settings']['logging_enabled'] = bool(log_template_operations)
-                
+
+            modalities = get_field(template_metadata, 'modalities')
+            if modalities:
+                config['other_settings']['modalities'] = list(modalities)
+
+            version_selector = (get_field(template_metadata, 'filterVersionSelector')
+                                or get_field(template_metadata, 'filter_version_selector'))
+            if version_selector:
+                config['other_settings']['filter_version'] = (
+                    get_field(version_selector, 'version')
+                    or get_field(version_selector, 'alias')
+                    or ''
+                )
+
         return config
     except Exception as e:
         print(f"Error serializing template: {e}")
@@ -500,6 +677,38 @@ def process_rest_api_results(response_data):
         print(f"Error processing REST API results: {e}")
     return filter_results
 
+def get_invocation_result(response_data):
+    """SUCCESS / PARTIAL / FAILURE. FAILURE means nothing was actually screened."""
+    return response_data.get('sanitizationResult', {}).get('invocationResult', '')
+
+def get_skipped_filters(response_data):
+    """Filters that did not execute. A skipped filter is not a pass."""
+    skipped = []
+    results = response_data.get('sanitizationResult', {}).get('filterResults', {})
+    for filter_name, filter_data in results.items():
+        for inner in filter_data.values():
+            if isinstance(inner, dict) and inner.get('executionState') == 'EXECUTION_SKIPPED':
+                skipped.append(filter_name)
+                break
+    return skipped
+
+def get_filter_version(response_data):
+    """The filter model version Model Armor actually used, e.g. 'v3 (FILTER_VERSION_ALIAS_LATEST)'."""
+    cfg = (response_data.get('sanitizationResult', {})
+           .get('sanitizationMetadata', {}).get('filterVersionConfig', {}))
+    version, alias = cfg.get('filterVersion'), cfg.get('filterVersionAlias')
+    if version and alias:
+        return f"{version} ({alias})"
+    return version or alias or None
+
+def get_extracted_image_text(response_data):
+    """OCR text Model Armor read out of a screened image."""
+    try:
+        return (response_data['sanitizationResult']['filterResults']['sdp']
+                ['sdpFilterResult']['inspectResult'].get('extractedImageText'))
+    except (KeyError, TypeError):
+        return None
+
 def check_sdp_transformation(output_str):
     """Extracts the transformed (redacted) text from a Model Armor sanitization result string."""
     try:
@@ -558,15 +767,26 @@ def sanitize_file_prompt_with_rest_api_optimized(file_data_base64, mime_type, te
     if cached_result:
         return cached_result
     
+    byte_data_type = get_byte_data_type(mime_type)
+    if not byte_data_type:
+        raise ValueError(f"Model Armor cannot screen '{mime_type}' content.")
+
+    if byte_data_type == 'IMAGE':
+        approx_bytes = (len(file_data_base64) * 3) // 4
+        if approx_bytes > MAX_IMAGE_BYTES:
+            raise ValueError(
+                f"Image is ~{approx_bytes // (1024 * 1024)}MB. Model Armor screens images up to 4MB."
+            )
+
     try:
         access_token = get_cached_auth_token()
         
-        url = f"https://{endpoint}/v1alpha/projects/{project}/locations/{location}/templates/{template_name}:sanitizeUserPrompt"
+        url = f"https://{endpoint}/v1/projects/{project}/locations/{location}/templates/{template_name}:sanitizeUserPrompt"
         
         payload = {
             "userPromptData": {
                 "byteItem": {
-                    "byteDataType": get_byte_data_type(mime_type),
+                    "byteDataType": byte_data_type,
                     "byteData": file_data_base64
                 }
             }
@@ -616,12 +836,75 @@ def sanitize_text_prompt_optimized(text, template_name, location, endpoint_info)
         raise e
 
 # --- Async Processing Functions ---
+def describe_scan_problems(response_data, subject):
+    """Return a message if Model Armor did not actually screen `subject`, else None.
+
+    Both cases below come back as HTTP 200 with no matches, so treating them as a
+    pass would let unscreened content through.
+    """
+    problems = []
+    invocation = get_invocation_result(response_data)
+    if invocation and invocation != 'SUCCESS':
+        problems.append(f"Model Armor did not screen the {subject} (invocationResult={invocation}).")
+    skipped = get_skipped_filters(response_data)
+    if skipped:
+        problems.append(f"Filters skipped on the {subject}: {', '.join(sorted(skipped))}.")
+    return " ".join(problems) if problems else None
+
+def analyze_image_prompt(prompt, file_data, template_name, location, endpoint_info):
+    """Screen an image, and its accompanying text separately.
+
+    userPromptData is a oneof, so `text` and `byteItem` cannot go in one request;
+    an image prompt with a caption therefore needs two sanitize calls.
+    """
+    if not endpoint_info.get('supports_images'):
+        message = (f"Image screening is only supported in the us and eu multi-regions; "
+                   f"'{location}' cannot screen images.")
+        return {
+            'output_str': message,
+            'filter_results': [],
+            'sdp_transformed_text': None,
+            'is_file': True,
+            'is_image': True,
+            'extracted_image_text': None,
+            'filter_version': None,
+            'scan_error': message,
+        }
+
+    image_result = sanitize_file_prompt_with_rest_api_optimized(
+        file_data['base64_data'], file_data['mime_type'],
+        template_name, location, endpoint_info['endpoint']
+    )
+    scan_error = describe_scan_problems(image_result, 'image')
+    filter_results = [f"{name} (image)" for name in process_rest_api_results(image_result)]
+    sections = ["=== IMAGE SCAN ===", json.dumps(image_result, indent=2)]
+
+    text = (prompt or '').strip()
+    if text:
+        text_result = sanitize_text_prompt_optimized(text, template_name, location, endpoint_info)
+        filter_results += [f"{name} (text)" for name in process_template_results(text_result)]
+        sections += ["", "=== TEXT SCAN ===", text_result]
+
+    return {
+        'output_str': "\n".join(sections),
+        'filter_results': filter_results,
+        # Basic SDP reports findings on images; it does not hand back a redacted image.
+        'sdp_transformed_text': None,
+        'is_file': True,
+        'is_image': True,
+        'extracted_image_text': get_extracted_image_text(image_result),
+        'filter_version': get_filter_version(image_result),
+        'scan_error': scan_error,
+    }
+
 async def analyze_prompt_async(prompt, file_data, prompt_template, location, endpoint_info):
     """Async wrapper for prompt analysis"""
     loop = asyncio.get_event_loop()
     
     def run_analysis():
-        if file_data:
+        if file_data and file_data.get('is_image'):
+            return analyze_image_prompt(prompt, file_data, prompt_template, location, endpoint_info)
+        elif file_data:
             result = sanitize_file_prompt_with_rest_api_optimized(
                 file_data['base64_data'], file_data['mime_type'], 
                 prompt_template, location, endpoint_info['endpoint']
@@ -633,7 +916,11 @@ async def analyze_prompt_async(prompt, file_data, prompt_template, location, end
                 'output_str': output_str,
                 'filter_results': filter_results,
                 'sdp_transformed_text': sdp_transformed_text,
-                'is_file': True
+                'is_file': True,
+                'is_image': False,
+                'extracted_image_text': None,
+                'filter_version': get_filter_version(result),
+                'scan_error': describe_scan_problems(result, 'file'),
             }
         else:
             result = sanitize_text_prompt_optimized(prompt, prompt_template, location, endpoint_info)
@@ -643,7 +930,11 @@ async def analyze_prompt_async(prompt, file_data, prompt_template, location, end
                 'output_str': result,
                 'filter_results': filter_results,
                 'sdp_transformed_text': sdp_transformed_text,
-                'is_file': False
+                'is_file': False,
+                'is_image': False,
+                'extracted_image_text': None,
+                'filter_version': None,
+                'scan_error': None,
             }
     
     return await loop.run_in_executor(None, run_analysis)
@@ -712,8 +1003,22 @@ async def process_chat_async(prompt, model_info, system_instruction, file_data,
         prompt_analysis = {
             'template': prompt_template, 'status': 'fail' if filter_results else 'pass',
             'details': details, 'matches': bool(filter_results),
-            'filter_results': filter_results, 'raw_output': output_str
+            'filter_results': filter_results, 'raw_output': output_str,
+            'extracted_image_text': prompt_analysis_result.get('extracted_image_text'),
+            'filter_version': prompt_analysis_result.get('filter_version')
         }
+
+        # Fail closed: content Model Armor did not actually screen must not reach the model.
+        scan_error = prompt_analysis_result.get('scan_error')
+        if scan_error:
+            print(f"WARNING: {scan_error} Not sending the prompt to the model.")
+            prompt_analysis['status'] = 'error'
+            prompt_analysis['details'] = f"⚠️ {scan_error}"
+            return {
+                'response': f"Request blocked — {scan_error}",
+                'prompt_analysis': prompt_analysis,
+                'response_analysis': None
+            }
 
     # If prompt had violations and we should use a default, we can stop here.
     if prompt_has_violations and use_default_response:
@@ -776,6 +1081,7 @@ def analyze_prompt():
         prompt_analysis = None
         filter_results = []
         output_str = ""
+        scan_error = None
 
         # Handle file upload scenario
         if 'file' in request.files:
@@ -799,11 +1105,22 @@ def analyze_prompt():
             
             file_data_base64, mime_type = get_file_data(file)
 
-            result = sanitize_file_prompt_with_rest_api_optimized(
-                file_data_base64, mime_type, prompt_template, location, endpoint_info['endpoint']
-            )
-            output_str = json.dumps(result, indent=2)
-            filter_results = process_rest_api_results(result)
+            if is_image_mime(mime_type):
+                analysis = analyze_image_prompt(
+                    request.form.get('prompt', ''),
+                    {'base64_data': file_data_base64, 'mime_type': mime_type, 'is_image': True},
+                    prompt_template, location, endpoint_info
+                )
+                output_str = analysis['output_str']
+                filter_results = analysis['filter_results']
+                scan_error = analysis['scan_error']
+            else:
+                result = sanitize_file_prompt_with_rest_api_optimized(
+                    file_data_base64, mime_type, prompt_template, location, endpoint_info['endpoint']
+                )
+                output_str = json.dumps(result, indent=2)
+                filter_results = process_rest_api_results(result)
+                scan_error = describe_scan_problems(result, 'file')
 
         # Handle text-only scenario
         else:
@@ -825,8 +1142,8 @@ def analyze_prompt():
         # Common response structure
         prompt_analysis = {
             'template': prompt_template,
-            'status': 'fail' if filter_results else 'pass',
-            'raw_output': output_str
+            'status': 'error' if scan_error else ('fail' if filter_results else 'pass'),
+            'raw_output': f"⚠️ {scan_error}\n\n{output_str}" if scan_error else output_str
         }
         
         return jsonify({'prompt_analysis': prompt_analysis})
@@ -968,6 +1285,18 @@ def update_template():
             payload['filterConfig'] = filter_config
 
         template_metadata = {}
+        if 'modalities' in config_data:
+            template_metadata['modalities'] = config_data['modalities']
+            update_mask.append('templateMetadata.modalities')
+
+        if 'filter_version' in config_data:
+            version_value = config_data['filter_version']
+            template_metadata['filterVersionSelector'] = (
+                {'alias': version_value} if str(version_value).startswith('FILTER_VERSION_ALIAS_')
+                else {'version': version_value}
+            )
+            update_mask.append('templateMetadata.filterVersionSelector')
+
         if 'logging_enabled' in config_data:
             logging_val = bool(config_data['logging_enabled'])
             template_metadata['logTemplateOperations'] = logging_val
@@ -1050,9 +1379,15 @@ def chat():
         file_data = {
             'base64_data': file_data_base64,
             'mime_type': mime_type,
-            'filename': file.filename
+            'filename': file.filename,
+            'is_image': is_image_mime(mime_type)
         }
-        prompt = prompt_text if prompt_text else f"Please analyze this document: {file.filename}"
+        if prompt_text:
+            prompt = prompt_text
+        elif file_data['is_image']:
+            prompt = f"Please describe this image: {file.filename}"
+        else:
+            prompt = f"Please analyze this document: {file.filename}"
         is_file_upload = True
 
     else:

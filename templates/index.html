@@ -733,7 +733,7 @@
                     <select class="form-select" id="modelSelect" onchange="checkFileSupport()">
                         <option value="">Select a model</option>
                         {% for model in foundation_models %}
-                        <option value="{{ model.display_name }}" data-provider="{{ model.provider }}" {% if model.name == 'gemini-3.1-flash-lite-preview' %}selected{% endif %}>{{
+                        <option value="{{ model.display_name }}" data-provider="{{ model.provider }}" {% if loop.first %}selected{% endif %}>{{
                             model.display_name }} ({{model.provider}})</option>
                         {% endfor %}
                     </select>
@@ -745,7 +745,7 @@
                 <div class="mb-3"><label for="locationSelect" class="form-label">Model Armor Location:</label><select
                         class="form-select" id="locationSelect" onchange="debouncedUpdateTemplates()">
                         <option value="" disabled selected>Loading...</option>{% for endpoint in model_armor_endpoints
-                        %}<option value="{{ endpoint.location }}">{{ endpoint.display_name }}</option>{% endfor %}
+                        %}<option value="{{ endpoint.location }}" data-supports-images="{{ 'true' if endpoint.supports_images else 'false' }}">{{ endpoint.display_name }}{{ ' 🖼' if endpoint.supports_images else '' }}</option>{% endfor %}
                     </select></div>
                 <div class="mb-3">
                     <label for="promptTemplate" class="form-label">Prompt Template:</label>
@@ -1013,7 +1013,7 @@
                         <div class="input-group">
                             <input type="text" class="form-control" id="userInput" placeholder="Type your message...">
                             <input type="file" class="form-control" id="fileInput"
-                                accept=".pdf,.docx,.docm,.dotx,.dotm,.pptx,.pptm,.potx,.pot,.xlsx,.xlsm,.xltx,.xltm"
+                                accept=".pdf,.docx,.docm,.dotx,.dotm,.pptx,.pptm,.potx,.pot,.xlsx,.xlsm,.xltx,.xltm,.png,.jpg,.jpeg,.bmp"
                                 style="display: none;">
                             <button class="btn btn-outline-secondary" id="fileButton" type="button">📎</button>
                             <button class="btn btn-primary" id="sendButton">Send</button>
@@ -1353,13 +1353,40 @@
             document.getElementById('fileInput').click();
         });
 
+        // Model Armor screens images up to 4MB, and only in the us/eu multi-regions.
+        const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+        const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'bmp'];
+
+        function isImageFile(file) {
+            return IMAGE_EXTENSIONS.includes(file.name.split('.').pop().toLowerCase());
+        }
+
+        function currentLocationSupportsImages() {
+            const select = document.getElementById('locationSelect');
+            const option = select.options[select.selectedIndex];
+            return option ? option.getAttribute('data-supports-images') === 'true' : false;
+        }
+
         document.getElementById('fileInput').addEventListener('change', (e) => {
             const file = e.target.files[0];
-            if (file) {
-                selectedFile = file;
-                document.getElementById('fileName').textContent = file.name;
-                document.getElementById('filePreview').style.display = 'block';
+            if (!file) return;
+
+            if (isImageFile(file)) {
+                if (file.size > MAX_IMAGE_BYTES) {
+                    alert(`"${file.name}" is ${(file.size / 1024 / 1024).toFixed(1)}MB. ` +
+                          `Model Armor screens images up to 4MB.`);
+                    e.target.value = '';
+                    return;
+                }
+                if (!currentLocationSupportsImages()) {
+                    alert('Image screening is only available in the us and eu multi-regions. ' +
+                          'Switch the Model Armor Location before sending an image.');
+                }
             }
+
+            selectedFile = file;
+            document.getElementById('fileName').textContent = file.name;
+            document.getElementById('filePreview').style.display = 'block';
         });
 
         document.getElementById('removeFile').addEventListener('click', () => {
