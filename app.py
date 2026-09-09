@@ -235,15 +235,19 @@ def pre_initialize_clients():
     print("INFO: All API clients pre-initialization complete.")
 
 
-# Image screening is only available in the us and eu multi-regions; regional
-# endpoints return invocationResult=FAILURE for IMAGE payloads.
+# Only the us and eu multi-regions are offered: image screening is unavailable
+# on regional endpoints, which return invocationResult=FAILURE for IMAGE payloads.
+#
+# Advanced SDP needs the DLP templates to sit in the same location as the Model
+# Armor template. Sensitive Data Protection has a "us" location but no "eu" one
+# (its EU multi-region is called "europe"), so advanced SDP can be used from us
+# but not from eu. sdp_location records the matching DLP location, or None when
+# there is none.
 model_armor_endpoints = [
-    {"location": "us", "endpoint": "modelarmor.us.rep.googleapis.com", "display_name": "us (multi-region)", "supports_images": True},
-    {"location": "eu", "endpoint": "modelarmor.eu.rep.googleapis.com", "display_name": "eu (multi-region)", "supports_images": True},
-    {"location": "us-central1", "endpoint": "modelarmor.us-central1.rep.googleapis.com", "display_name": "us-central1", "supports_images": False},
-    {"location": "us-east1", "endpoint": "modelarmor.us-east1.rep.googleapis.com", "display_name": "us-east1", "supports_images": False},
-    {"location": "europe-west4", "endpoint": "modelarmor.europe-west4.rep.googleapis.com", "display_name": "europe-west4", "supports_images": False},
-    {"location": "asia-southeast1", "endpoint": "modelarmor.asia-southeast1.rep.googleapis.com", "display_name": "asia-southeast1", "supports_images": False},
+    {"location": "us", "endpoint": "modelarmor.us.rep.googleapis.com",
+     "display_name": "us (multi-region)", "supports_images": True, "sdp_location": "us"},
+    {"location": "eu", "endpoint": "modelarmor.eu.rep.googleapis.com",
+     "display_name": "eu (multi-region)", "supports_images": True, "sdp_location": None},
 ]
 
 generation_config = types.GenerateContentConfig(
@@ -1180,10 +1184,12 @@ def _dlp_info_types_from_deidentify(template):
     return names
 
 def fetch_dlp_templates(location):
-    """List the SDP inspect and deidentify templates available in one location.
+    """List the SDP inspect and deidentify templates usable from a Model Armor location.
 
     Model Armor requires the DLP templates it references to live in the same
-    location as the Model Armor template, so only that location is listed.
+    location as the Model Armor template, so only that location is listed. When
+    Sensitive Data Protection has no matching location, advanced SDP cannot be
+    used at all and a note explains why.
     """
     cache_key = f"dlp_{location}"
     if cache_key in template_cache:
@@ -1191,9 +1197,20 @@ def fetch_dlp_templates(location):
         if time.time() - timestamp < CACHE_TTL:
             return cached_data
 
+    endpoint_info = next((e for e in model_armor_endpoints if e['location'] == location), None)
+    sdp_location = (endpoint_info or {}).get('sdp_location')
+    if not sdp_location:
+        return {
+            'inspect_templates': [],
+            'deidentify_templates': [],
+            'note': (f"Sensitive Data Protection has no '{location}' location, and Model Armor "
+                     f"requires the DLP templates to be in the same location as the template. "
+                     f"Use Basic SDP here; Advanced SDP is only available from us."),
+        }
+
     headers = {"Authorization": f"Bearer {get_cached_auth_token()}"}
-    base = f"https://{DLP_ENDPOINT}/v2/projects/{project}/locations/{location}"
-    result = {'inspect_templates': [], 'deidentify_templates': []}
+    base = f"https://{DLP_ENDPOINT}/v2/projects/{project}/locations/{sdp_location}"
+    result = {'inspect_templates': [], 'deidentify_templates': [], 'note': ''}
 
     for kind, list_field, extractor in (
         ('inspectTemplates', 'inspect_templates', _dlp_info_types_from_inspect),
