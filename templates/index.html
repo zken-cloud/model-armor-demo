@@ -341,6 +341,15 @@
             background-color: #fce8e6;
             color: #a50e0e;
         }
+        .analysis-card.skipped {
+            background-color: #fef7e0;
+            color: #b06000;
+        }
+        .filter-version {
+            margin-top: 0.5rem;
+            font-size: 0.75rem;
+            color: #5f6368;
+        }
 
         .analysis-text {
             font-weight: 500;
@@ -1408,12 +1417,19 @@
             }
         }
 
-        function addMessage(message, isUser, source = null) {
+        function addMessage(message, isUser, source = null, attachmentName = null) {
             const chatContainer = document.getElementById('chatContainer');
             const messageDiv = document.createElement('div');
             messageDiv.className = `message ${isUser ? 'user-message' : 'bot-message'}`;
             if (isUser) {
                 messageDiv.textContent = message;
+                if (attachmentName) {
+                    if (message) messageDiv.appendChild(document.createElement('br'));
+                    const chip = document.createElement('span');
+                    chip.className = 'file-indicator';
+                    chip.textContent = `📎 ${attachmentName}`;
+                    messageDiv.appendChild(chip);
+                }
                 messageDiv.style.whiteSpace = 'pre-wrap';
             } else {
                 messageDiv.innerHTML = '<div class="loading-spinner"></div>';
@@ -1505,9 +1521,7 @@
             const promptTemplate = document.getElementById('promptTemplate').value;
 
             // Display user message in chat
-            const displayMessage = selectedFile ?
-                `${message}<br><span class="file-indicator">📎 ${selectedFile.name}</span>` : message;
-            addMessage(displayMessage, true);
+            addMessage(message, true, null, selectedFile ? selectedFile.name : null);
             addMessage('', false);
 
             userInput.value = '';
@@ -1639,123 +1653,46 @@
             }
 
             contentContainer.innerHTML = '';
-            const filterMap = {
-                'rai': 'Responsible AI',
-                'sdp': 'Sensitive Data',
-                'pi_and_jailbreak': 'Jailbreak / PI',
-                'malicious_uris': 'Malicious URLs',
-                'csam': 'CSAM'
-            };
 
-            const allFilters = Object.keys(filterMap);
-            const rawText = analysis.raw_output || '';
+            // The server normalises every Model Armor result (text, document and
+            // image) into filter_details, so there is one shape to render here.
+            const cards = analysis.filter_details || [];
+            if (!cards.length) {
+                contentContainer.innerHTML = '<p>No filter results returned.</p>';
+            } else {
+                const icons = { pass: '\u2714\ufe0f', fail: '\u274c', skipped: '\u26a0\ufe0f' };
+                const fallbackTitle = {
+                    pass: 'No match found',
+                    fail: 'No specific details available',
+                    skipped: 'This filter did not run, so the content was not checked'
+                };
+                cards.forEach(card => {
+                    const div = document.createElement('div');
+                    div.className = `analysis-card ${card.status}`;
+                    // Details can echo attacker-controlled text (matched URLs, OCR
+                    // output), so set it as a property rather than building HTML.
+                    div.title = card.details || fallbackTitle[card.status] || '';
 
-            // Check if this is JSON format (file-based analysis) or string format (text-based analysis)
-            let isJsonFormat = false;
-            try {
-                const jsonData = JSON.parse(rawText);
-                if (jsonData.sanitizationResult && jsonData.sanitizationResult.filterResults) {
-                    isJsonFormat = true;
- 
-                    // Process JSON format (file-based analysis)
-                    const filterResults = jsonData.sanitizationResult.filterResults;
-                    const foundFilterKeys = Object.keys(filterResults);
- 
-                    allFilters.forEach(key => {
-                        if (foundFilterKeys.includes(key)) {
-                            let status = 'pass';
-                            let matchState = 'NO_MATCH_FOUND';
-                            let details = '';
- 
-                            // Extract match state and details based on filter type
-                            if (key === 'rai' && filterResults[key].raiFilterResult) {
-                                matchState = filterResults[key].raiFilterResult.matchState;
-                                if (matchState === 'MATCH_FOUND' && filterResults[key].raiFilterResult.raiFilterSubresults) {
-                                    details = filterResults[key].raiFilterResult.raiFilterSubresults
-                                        .filter(r => r.matchState === 'MATCH_FOUND')
-                                        .map(r => `${r.category}: ${r.confidenceLevel}`)
-                                        .join(', ');
-                                }
-                            } else if (key === 'sdp' && filterResults[key].sdpFilterResult) {
-                                if (filterResults[key].sdpFilterResult.inspectResult) {
-                                    matchState = filterResults[key].sdpFilterResult.inspectResult.matchState;
-                                    if (matchState === 'MATCH_FOUND' && filterResults[key].sdpFilterResult.inspectResult.findings) {
-                                        details = "Found: " + filterResults[key].sdpFilterResult.inspectResult.findings
-                                            .map(f => f.infoType.name)
-                                            .join(', ');
-                                    }
-                                }
-                            } else if (key === 'pi_and_jailbreak' && filterResults[key].piAndJailbreakFilterResult) {
-                                matchState = filterResults[key].piAndJailbreakFilterResult.matchState;
-                                if (matchState === 'MATCH_FOUND') {
-                                    details = `Confidence: ${filterResults[key].piAndJailbreakFilterResult.confidenceLevel}`;
-                                }
-                            } else if (key === 'malicious_uris' && filterResults[key].maliciousUriFilterResult) {
-                                matchState = filterResults[key].maliciousUriFilterResult.matchState;
-                                if (matchState === 'MATCH_FOUND' && filterResults[key].maliciousUriFilterResult.matchedUris) {
-                                    details = "Matched URLs: " + filterResults[key].maliciousUriFilterResult.matchedUris.map(u => u.uri).join(', ');
-                                }
-                            } else if (key === 'csam' && filterResults[key].csamFilterFilterResult) {
-                                matchState = filterResults[key].csamFilterFilterResult.matchState;
-                            }
- 
-                            if (matchState === 'MATCH_FOUND') {
-                                status = 'fail';
-                            }
- 
-                            contentContainer.innerHTML += `
-                                <div class="analysis-card ${status}" title="${details || 'No specific details available'}">
-                                    <span class="analysis-icon">${status === 'pass' ? '✔️' : '❌'}</span>
-                                    <span class="analysis-text">${filterMap[key]} - ${status.toUpperCase()}</span>
-                                </div>
-                            `;
-                        }
-                    });
-                }
-            } catch (e) {
-                isJsonFormat = false;
-            }
- 
-            if (!isJsonFormat) {
-                // Process string format (text-based analysis)
-                allFilters.forEach(key => {
-                    const passPattern = new RegExp(`key: "${key}"[^}]*?match_state: NO_MATCH_FOUND`, 's');
-                    const failPattern = new RegExp(`key: "${key}"[^}]*?match_state: MATCH_FOUND`, 's');
- 
-                    let status = 'pass';
-                    let details = '';
-                    
-                    if (failPattern.test(rawText)) {
-                        status = 'fail';
-                        // Extract details from string
-                        const match = rawText.match(new RegExp(`key: "${key}"[^}]*?value\\s*{(.+?)}`, 's'));
-                        if (match) {
-                            const block = match[1];
-                            const confMatch = block.match(/confidence_level:\s*(\w+)/);
-                            if (confMatch) {
-                                details = `Confidence: ${confMatch[1]}`;
-                            }
-                            const catMatch = block.match(/category:\s*(\w+)/);
-                            if (catMatch) {
-                                details += ` Category: ${catMatch[1]}`;
-                            }
-                            // For malicious URLs in string format
-                            const urlMatch = block.match(/uri:\s*"([^"]+)"/g);
-                            if (urlMatch) {
-                                details += " Matched URLs: " + urlMatch.map(u => u.match(/"([^"]+)"/)[1]).join(', ');
-                            }
-                        }
-                    } else if (!passPattern.test(rawText) && !failPattern.test(rawText)) {
-                        return;
-                    }
- 
-                    contentContainer.innerHTML += `
-                        <div class="analysis-card ${status}" title="${details || 'No specific details available'}">
-                            <span class="analysis-icon">${status === 'pass' ? '✔️' : '❌'}</span>
-                            <span class="analysis-text">${filterMap[key]} - ${status.toUpperCase()}</span>
-                        </div>
-                    `;
+                    const icon = document.createElement('span');
+                    icon.className = 'analysis-icon';
+                    icon.textContent = icons[card.status] || '\u2753';
+
+                    const text = document.createElement('span');
+                    text.className = 'analysis-text';
+                    const scope = card.scope ? ` (${card.scope})` : '';
+                    text.textContent = `${card.label}${scope} - ${card.status.toUpperCase()}`;
+
+                    div.appendChild(icon);
+                    div.appendChild(text);
+                    contentContainer.appendChild(div);
                 });
+            }
+
+            if (analysis.filter_version) {
+                const version = document.createElement('p');
+                version.className = 'filter-version';
+                version.textContent = `Filter model: ${analysis.filter_version}`;
+                contentContainer.appendChild(version);
             }
 
             rawOutputContainer.textContent = analysis.raw_output;

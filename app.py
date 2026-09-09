@@ -7,19 +7,15 @@ import google.auth
 from flask import Flask, render_template, request, jsonify
 from google.cloud import modelarmor_v1
 from dotenv import load_dotenv
-from google.api_core import exceptions
 import base64
 from werkzeug.utils import secure_filename
 import mimetypes
 import json
 import traceback
-import ast
 import asyncio
-import concurrent.futures
 import hashlib
 import time
 from datetime import timezone
-from functools import lru_cache
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -153,47 +149,28 @@ http_client = OptimizedHTTPClient()
 # --- Caching Layer ---
 model_armor_cache = {}
 template_cache = {}
-file_cache = {}  # Cache for file base64 data
 CACHE_TTL = 300  # 5 minutes
 
 def get_file_data(file):
-    """Reads file, base64 encodes it, and manages cache."""
-    file.seek(0, 2)  # Seek to end
-    file_size = file.tell()
-    file.seek(0)  # Seek back to start
-    file_cache_key = f"{file.filename}_{file_size}"
-    
-    if file_cache_key in file_cache:
-        cached_data, timestamp = file_cache[file_cache_key]
-        if time.time() - timestamp < CACHE_TTL:
-            print(f"INFO: Using cached file data for {file.filename}")
-            return cached_data['base64_data'], cached_data['mime_type']
-        else:
-            del file_cache[file_cache_key]
-            
+    """Read an upload and base64 encode it.
+
+    Deliberately not cached by name: a "<filename>_<size>" key is shared by every
+    caller, so one upload could be answered with a different upload's bytes and
+    skip screening entirely.
+    """
+    file.seek(0)
     file_content = file.read()
     file_data_base64 = base64.b64encode(file_content).decode('utf-8')
     mime_type = mimetypes.guess_type(file.filename)[0]
-    
-    file_cache[file_cache_key] = ({'base64_data': file_data_base64, 'mime_type': mime_type}, time.time())
-    
-    # Clean old cache entries if cache is too large
-    if len(file_cache) > 50:
-        current_time = time.time()
-        expired_keys = [k for k, (_, timestamp) in file_cache.items()
-                       if current_time - timestamp > CACHE_TTL]
-        for k in expired_keys:
-            del file_cache[k]
-            
     return file_data_base64, mime_type
 
 def get_cache_key(data, template_name, location):
     """Generate cache key for Model Armor results"""
     if isinstance(data, dict):  # File data
-        content_hash = hashlib.md5(data['base64_data'][:1000].encode()).hexdigest()
+        content_hash = hashlib.sha256(data['base64_data'].encode()).hexdigest()
         return f"file_{content_hash}_{template_name}_{location}"
     else:  # Text data
-        content_hash = hashlib.md5(data.encode()).hexdigest()
+        content_hash = hashlib.sha256(data.encode()).hexdigest()
         return f"text_{content_hash}_{template_name}_{location}"
 
 def get_cached_result(cache_key):
@@ -689,9 +666,83 @@ def fetch_model_armor_templates(location, endpoint):
         print(f"Error fetching templates from {location}: {e}")
         return [], []
 
-def process_template_results(output_str):
-    matches = re.finditer(r'key: "([^"]+)"[^}]*?match_state: MATCH_FOUND', output_str, re.DOTALL)
-    return [match.group(1) for match in matches]
+FILTER_LABELS = {
+    'rai': 'Responsible AI',
+    'sdp': 'Sensitive Data',
+    'pi_and_jailbreak': 'Jailbreak / PI',
+    'malicious_uris': 'Malicious URLs',
+    'csam': 'CSAM',
+}
+
+UNSPECIFIED_CONFIDENCE = 'DETECTION_CONFIDENCE_LEVEL_UNSPECIFIED'
+
+def sanitize_result_to_dict(response):
+    """Normalize an SDK sanitize response into the JSON shape the REST API returns."""
+    return type(response).to_dict(
+        response, preserving_proto_field_name=False, use_integers_for_enums=False
+    )
+
+def get_filter_verdict(filter_data, key):
+    """The dict holding matchState/executionState for one filter result."""
+    inner = next((v for v in filter_data.values() if isinstance(v, dict)), {})
+    if key == 'sdp':
+        return inner.get('inspectResult') or inner.get('deidentifyResult') or inner
+    return inner
+
+def describe_filter_match(key, verdict):
+    """Human-readable detail for a matched filter, or '' when there is nothing to add."""
+    if key == 'rai':
+        matched = []
+        for category, result in (verdict.get('raiFilterTypeResults') or {}).items():
+            if result.get('matchState') != 'MATCH_FOUND':
+                continue
+            confidence = result.get('confidenceLevel')
+            label = category.replace('_', ' ')
+            matched.append(f"{label}: {confidence}" if confidence and confidence != UNSPECIFIED_CONFIDENCE else label)
+        return ', '.join(matched)
+    if key == 'sdp':
+        info_types = []
+        for finding in verdict.get('findings') or []:
+            info_type = finding.get('infoType')
+            info_types.append(info_type.get('name') if isinstance(info_type, dict) else info_type)
+        info_types = [i for i in info_types if i]
+        return 'Found: ' + ', '.join(sorted(set(info_types))) if info_types else ''
+    if key == 'pi_and_jailbreak':
+        confidence = verdict.get('confidenceLevel')
+        return f"Confidence: {confidence}" if confidence and confidence != UNSPECIFIED_CONFIDENCE else ''
+    if key == 'malicious_uris':
+        matched = verdict.get('maliciousUriMatchedItems') or verdict.get('matchedUris') or []
+        uris = [u.get('uri') for u in matched if u.get('uri')]
+        return 'Matched URLs: ' + ', '.join(uris) if uris else ''
+    return ''
+
+def summarize_filter_results(response_data, scope=None):
+    """Normalize one sanitization result into UI-ready cards.
+
+    A skipped filter gets its own state rather than a pass, so the UI cannot
+    show a green tick for a check that never ran.
+    """
+    results = response_data.get('sanitizationResult', {}).get('filterResults', {})
+    cards = []
+    for key, label in FILTER_LABELS.items():
+        filter_data = results.get(key)
+        if not filter_data:
+            continue
+        verdict = get_filter_verdict(filter_data, key)
+        if verdict.get('executionState') == 'EXECUTION_SKIPPED':
+            status = 'skipped'
+        elif verdict.get('matchState') == 'MATCH_FOUND':
+            status = 'fail'
+        else:
+            status = 'pass'
+        cards.append({
+            'key': key,
+            'label': label,
+            'status': status,
+            'details': describe_filter_match(key, verdict) if status == 'fail' else '',
+            'scope': scope,
+        })
+    return cards
 
 def process_rest_api_results(response_data):
     """Parses the JSON response from the Model Armor REST API to find all filters with a MATCH_FOUND state."""
@@ -738,16 +789,6 @@ def get_extracted_image_text(response_data):
     except (KeyError, TypeError):
         return None
 
-def check_sdp_transformation(output_str):
-    """Extracts the transformed (redacted) text from a Model Armor sanitization result string."""
-    try:
-        match = re.search(r'deidentify_result\s*{[^}]*?text:\s*"((?:[^"\\]|\\.)*)"', output_str, re.DOTALL)
-        if match:
-            return ast.literal_eval(f'"{match.group(1)}"')
-    except Exception as e:
-        print(f"Error extracting SDP transformation from string: {e}")
-    return None
-
 def check_sdp_transformation_for_file(response_data):
     """Extracts the transformed (redacted) text from a Model Armor file sanitization JSON result."""
     try:
@@ -765,23 +806,32 @@ def analyze_response_with_template(response_text, template_name, location, model
         model_response_data.text = response_text
         response_sanitize_request = modelarmor_v1.SanitizeModelResponseRequest(name=get_template_path(template_name, location), model_response_data=model_response_data)
         response_check = modelarmor_client.sanitize_model_response(request=response_sanitize_request)
-        output_str = str(response_check)
-        filter_results = process_template_results(output_str)
+        result = sanitize_result_to_dict(response_check)
+        output_str = json.dumps(result, indent=2)
+        filter_results = process_rest_api_results(result)
 
-        sdp_text = check_sdp_transformation(output_str)
+        sdp_text = check_sdp_transformation_for_file(result)
         has_sdp = 'sdp' in filter_results
 
         if sdp_text and has_sdp and not use_default_response:
             response_text = sdp_text
 
         details = "❌ Violations found:\n" + "\n".join(f"• {result}" for result in filter_results) if filter_results else "✅ No template violations found"
-        return {'response_text': response_text, 'analysis': {'template': template_display_name, 'status': 'fail' if filter_results else 'pass', 'details': details, 'matches': bool(filter_results), 'filter_results': filter_results, 'raw_output': output_str}, 'has_violations': bool(filter_results), 'has_sdp': has_sdp}
+        return {'response_text': response_text, 'analysis': {'template': template_display_name, 'status': 'fail' if filter_results else 'pass', 'details': details, 'matches': bool(filter_results), 'filter_results': filter_results, 'raw_output': output_str, 'filter_details': summarize_filter_results(result), 'filter_version': get_filter_version(result)}, 'has_violations': bool(filter_results), 'has_sdp': has_sdp}
     except Exception as e:
         print(f"Error in response analysis: {e}")
         return {'response_text': response_text, 'analysis': {'template': template_display_name, 'status': 'error', 'details': f'Error in Model Armor analysis: {e}', 'matches': False, 'raw_output': str(e)}, 'has_violations': False}
 
+TEMPLATE_NAME_PATTERN = re.compile(r'^[A-Za-z0-9_-]{1,63}$')
+
+def validate_template_name(template_name):
+    """Reject anything that could escape the templates/ path segment."""
+    if not template_name or not TEMPLATE_NAME_PATTERN.match(template_name):
+        raise ValueError(f"Invalid template name: {template_name!r}")
+    return template_name
+
 def get_template_path(template_name, location):
-    return f"projects/{project}/locations/{location}/templates/{template_name}"
+    return f"projects/{project}/locations/{location}/templates/{validate_template_name(template_name)}"
 
 def create_text_data_item(text):
     data_item = modelarmor_v1.DataItem()
@@ -810,7 +860,8 @@ def sanitize_file_prompt_with_rest_api_optimized(file_data_base64, mime_type, te
     try:
         access_token = get_cached_auth_token()
         
-        url = f"https://{endpoint}/v1/projects/{project}/locations/{location}/templates/{template_name}:sanitizeUserPrompt"
+        url = (f"https://{endpoint}/v1/projects/{project}/locations/{location}"
+               f"/templates/{validate_template_name(template_name)}:sanitizeUserPrompt")
         
         payload = {
             "userPromptData": {
@@ -859,7 +910,7 @@ def sanitize_text_prompt_optimized(text, template_name, location, endpoint_info)
             user_prompt_data=prompt_data_item
         )
         prompt_check = modelarmor_client.sanitize_user_prompt(request=prompt_sanitize_request)
-        result = str(prompt_check)
+        result = sanitize_result_to_dict(prompt_check)
         
         # Cache the result
         cache_result(cache_key, result)
@@ -897,6 +948,7 @@ def analyze_image_prompt(prompt, file_data, template_name, location, endpoint_in
         return {
             'output_str': message,
             'filter_results': [],
+            'filter_details': [],
             'sdp_transformed_text': None,
             'is_file': True,
             'is_image': True,
@@ -911,17 +963,20 @@ def analyze_image_prompt(prompt, file_data, template_name, location, endpoint_in
     )
     scan_error = describe_scan_problems(image_result, 'image')
     filter_results = [f"{name} (image)" for name in process_rest_api_results(image_result)]
+    filter_details = summarize_filter_results(image_result, scope='image')
     sections = ["=== IMAGE SCAN ===", json.dumps(image_result, indent=2)]
 
     text = (prompt or '').strip()
     if text:
         text_result = sanitize_text_prompt_optimized(text, template_name, location, endpoint_info)
-        filter_results += [f"{name} (text)" for name in process_template_results(text_result)]
-        sections += ["", "=== TEXT SCAN ===", text_result]
+        filter_results += [f"{name} (text)" for name in process_rest_api_results(text_result)]
+        filter_details += summarize_filter_results(text_result, scope='text')
+        sections += ["", "=== TEXT SCAN ===", json.dumps(text_result, indent=2)]
 
     return {
         'output_str': "\n".join(sections),
         'filter_results': filter_results,
+        'filter_details': filter_details,
         # Basic SDP reports findings on images; it does not hand back a redacted image.
         'sdp_transformed_text': None,
         'is_file': True,
@@ -949,6 +1004,7 @@ async def analyze_prompt_async(prompt, file_data, prompt_template, location, end
             return {
                 'output_str': output_str,
                 'filter_results': filter_results,
+                'filter_details': summarize_filter_results(result),
                 'sdp_transformed_text': sdp_transformed_text,
                 'is_file': True,
                 'is_image': False,
@@ -958,16 +1014,17 @@ async def analyze_prompt_async(prompt, file_data, prompt_template, location, end
             }
         else:
             result = sanitize_text_prompt_optimized(prompt, prompt_template, location, endpoint_info)
-            filter_results = process_template_results(result)
-            sdp_transformed_text = check_sdp_transformation(result)
+            filter_results = process_rest_api_results(result)
+            sdp_transformed_text = check_sdp_transformation_for_file(result)
             return {
-                'output_str': result,
+                'output_str': json.dumps(result, indent=2),
                 'filter_results': filter_results,
+                'filter_details': summarize_filter_results(result),
+                'filter_version': get_filter_version(result),
                 'sdp_transformed_text': sdp_transformed_text,
                 'is_file': False,
                 'is_image': False,
                 'extracted_image_text': None,
-                'filter_version': None,
                 'scan_error': None,
             }
     
@@ -1038,6 +1095,7 @@ async def process_chat_async(prompt, model_info, system_instruction, file_data,
             'template': prompt_template, 'status': 'fail' if filter_results else 'pass',
             'details': details, 'matches': bool(filter_results),
             'filter_results': filter_results, 'raw_output': output_str,
+            'filter_details': prompt_analysis_result.get('filter_details') or [],
             'extracted_image_text': prompt_analysis_result.get('extracted_image_text'),
             'filter_version': prompt_analysis_result.get('filter_version')
         }
@@ -1114,6 +1172,7 @@ def analyze_prompt():
     try:
         prompt_analysis = None
         filter_results = []
+        filter_details = []
         output_str = ""
         scan_error = None
 
@@ -1147,6 +1206,7 @@ def analyze_prompt():
                 )
                 output_str = analysis['output_str']
                 filter_results = analysis['filter_results']
+                filter_details = analysis['filter_details']
                 scan_error = analysis['scan_error']
             else:
                 result = sanitize_file_prompt_with_rest_api_optimized(
@@ -1154,6 +1214,7 @@ def analyze_prompt():
                 )
                 output_str = json.dumps(result, indent=2)
                 filter_results = process_rest_api_results(result)
+                filter_details = summarize_filter_results(result)
                 scan_error = describe_scan_problems(result, 'file')
 
         # Handle text-only scenario
@@ -1170,27 +1231,29 @@ def analyze_prompt():
             if not endpoint_info:
                 return jsonify({'error': 'Invalid location for analysis'}), 400
             
-            output_str = sanitize_text_prompt_optimized(prompt, prompt_template, location, endpoint_info)
-            filter_results = process_template_results(output_str)
+            result = sanitize_text_prompt_optimized(prompt, prompt_template, location, endpoint_info)
+            output_str = json.dumps(result, indent=2)
+            filter_results = process_rest_api_results(result)
+            filter_details = summarize_filter_results(result)
 
         # Common response structure
         prompt_analysis = {
             'template': prompt_template,
             'status': 'error' if scan_error else ('fail' if filter_results else 'pass'),
+            'filter_details': filter_details,
             'raw_output': f"⚠️ {scan_error}\n\n{output_str}" if scan_error else output_str
         }
         
         return jsonify({'prompt_analysis': prompt_analysis})
 
-    except Exception as e:
-        error_message = f"An unexpected error occurred in prompt analysis: {str(e)}"
+    except Exception:
         print(f"ERROR in /analyze_prompt: {traceback.format_exc()}")
         return jsonify({
-            'error': error_message,
+            'error': 'An unexpected error occurred in prompt analysis.',
             'prompt_analysis': {
-                'template': request.form.get('promptTemplate') or request.get_json().get('promptTemplate'),
+                'template': request.form.get('promptTemplate'),
                 'status': 'error',
-                'raw_output': traceback.format_exc()
+                'raw_output': 'Prompt analysis failed. See server logs for details.'
             }
         }), 500
 # --- END: MODIFIED ENDPOINT ---
@@ -1388,7 +1451,6 @@ def update_template():
 @app.route('/chat', methods=['POST'])
 def chat():
     file_data = None
-    is_file_upload = False
 
     if 'file' in request.files:
         file = request.files['file']
@@ -1422,7 +1484,6 @@ def chat():
             prompt = f"Please describe this image: {file.filename}"
         else:
             prompt = f"Please analyze this document: {file.filename}"
-        is_file_upload = True
 
     else:
         data = request.get_json()
