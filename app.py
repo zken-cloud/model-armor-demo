@@ -1150,7 +1150,8 @@ async def process_chat_async(prompt, model_info, system_instruction, file_data,
             return {
                 'response': f"Request blocked — {scan_error}",
                 'prompt_analysis': prompt_analysis,
-                'response_analysis': None
+                'response_analysis': None,
+                'source': 'Demo app — blocked before the model was called'
             }
 
     # If prompt had violations and we should use a default, we can stop here.
@@ -1159,7 +1160,8 @@ async def process_chat_async(prompt, model_info, system_instruction, file_data,
         return {
             'response': default_response,
             'prompt_analysis': prompt_analysis,
-            'response_analysis': None
+            'response_analysis': None,
+            'source': 'Default response — Model Armor blocked the prompt, the model was not called'
         }
 
     # --- Step 2: Generate the model response using the corrected inputs ---
@@ -1167,6 +1169,7 @@ async def process_chat_async(prompt, model_info, system_instruction, file_data,
     model_response = await generate_response_async(prompt_for_llm, model_info, system_instruction, file_data_for_llm)
     
     # --- Step 3: Analyze the response (as before) ---
+    source = model_info.get('provider')
     response_analysis = None
     if response_template:
         print("INFO: Analyzing response with Model Armor...")
@@ -1176,15 +1179,20 @@ async def process_chat_async(prompt, model_info, system_instruction, file_data,
             if use_default_response:
                 print("INFO: Response violation found, using default response.")
                 model_response = default_response
+                source = 'Default response — Model Armor blocked the model output'
             else:
                 # Use the redacted response if available
-                model_response = response_result.get('response_text', model_response)
+                redacted = response_result.get('response_text', model_response)
+                if redacted != model_response:
+                    source = f"{model_info.get('provider')} — redacted by Model Armor"
+                model_response = redacted
                 print("INFO: Response violation found, using redacted response.")
 
     return {
         'response': model_response,
         'prompt_analysis': prompt_analysis,
-        'response_analysis': response_analysis
+        'response_analysis': response_analysis,
+        'source': source
     }
 # END: CORRECTED SEQUENTIAL LOGIC WITH FILE HANDLING
 
@@ -1616,7 +1624,9 @@ def chat():
         
         return jsonify({
             'response': response_text,
-            'source': model_info.get('provider'),
+            # Say where the text actually came from. Attributing an app-generated
+            # block to the model provider is misleading in a security demo.
+            'source': result.get('source') or model_info.get('provider'),
             'model_armor': {
                 'prompt_analysis': prompt_analysis,
                 'response_analysis': response_analysis
