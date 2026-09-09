@@ -971,9 +971,10 @@ def describe_scan_problems(response_data, subject):
     if problems and subject == 'image':
         # A de-identify template disables image screening: every image filter is
         # skipped. An inspect-only advanced config screens images normally.
-        problems.append("If the template has a De-identify template set, clear it — "
-                        "de-identification is not compatible with image screening. "
-                        "An Inspect template on its own works fine.")
+        problems.append("A De-identify template on the prompt template blocks image "
+                        "screening. Clear that field to screen images; an Inspect "
+                        "template on its own is fine, and De-identify still works for "
+                        "text prompts and for the response template.")
     return " ".join(problems) if problems else None
 
 def analyze_image_prompt(prompt, file_data, template_name, location, endpoint_info):

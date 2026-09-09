@@ -886,7 +886,13 @@
                                         <li><strong>Responsible AI</strong>: Hate Speech, Dangerous Content, Harassment, Sexually Explicit. All default to <strong>High and above</strong>, so mild content deliberately passes. Lower a threshold to Low or Medium to see it trigger more readily.</li>
                                         <li><strong>Detection</strong>: Prompt Injection &amp; Jailbreak, and Malicious URLs.</li>
                                         <li><strong>Sensitive Data Protection</strong>: Basic, or Advanced with inspect / de-identify templates. Those two fields are dropdowns listing the templates that exist in the selected region &mdash; hover one to see the infoTypes that trigger it.
-                                            <br><strong class="text-danger">A De-identify template disables image screening.</strong> With one set, Model Armor skips every filter on an image and the app blocks the request. An <em>Inspect</em> template on its own is fine &mdash; it screens images normally and reports findings such as a credit card number read out of the picture. De-identification is unaffected for text, so leave De-identify empty when demonstrating images and set it when demonstrating redaction.</li>
+                                            <br><strong class="text-danger">De-identify blocks image input.</strong> A De-identify template on the <em>prompt</em> template makes Model Armor skip every filter on an uploaded image, so the app blocks the request. This affects image input only:
+                                            <ul>
+                                                <li><em>Inspect</em> on its own screens images normally, and reports findings such as a credit card number read out of the picture.</li>
+                                                <li>Text prompts still redact as usual.</li>
+                                                <li>De-identify on the <em>response</em> template is unaffected, so model output can still be redacted.</li>
+                                            </ul>
+                                            Clear De-identify on the prompt template when demonstrating images, and put it on the response template to demonstrate redaction.</li>
                                     </ul>
                                     <p class="mb-4">Templates use the <strong>latest</strong> filter model (currently v3). The version actually used is shown under the analysis panel.</p>
 
@@ -1050,11 +1056,13 @@
 
                                         <div id="sdpImageWarning" class="alert alert-danger py-2 px-2 mb-2"
                                              style="display:none; font-size:0.75rem;">
-                                            <strong>A De-identify template disables image screening.</strong>
-                                            With one set, Model Armor skips every filter on images and returns
-                                            invocationResult=FAILURE. Text redaction is unaffected. Leave De-identify
-                                            empty to keep image screening &mdash; an Inspect template on its own still
-                                            inspects images.
+                                            <strong>De-identify blocks image input.</strong>
+                                            With a De-identify template on the <em>prompt</em> template, Model Armor
+                                            skips every filter on an uploaded image and returns
+                                            invocationResult=FAILURE, so the app blocks the request. Text prompts still
+                                            redact normally, and De-identify on the <em>response</em> template is
+                                            unaffected. Clear this field if you need to screen images; an Inspect
+                                            template on its own inspects images fine.
                                         </div>
                                         <div id="sdpAdvancedFields" style="display: none;">
                                             <div id="sdpUnavailableNote" class="alert alert-warning py-2 px-2 mb-2"
@@ -2019,7 +2027,11 @@
             const advanced = document.getElementById('customSdpMode').value === 'Advanced';
             const deidentify = document.getElementById('customDeidentifyTemplate');
             const hasDeidentify = !!(deidentify && deidentify.value);
-            warning.style.display = advanced && hasDeidentify ? 'block' : 'none';
+            // Only the prompt template ever receives an image; a model response is
+            // always text, so de-identify is safe on the response template.
+            const isPromptTemplate = (document.getElementById('customTemplateName').value || '')
+                .endsWith('-prompt');
+            warning.style.display = advanced && hasDeidentify && isPromptTemplate ? 'block' : 'none';
         }
 
         async function openCustomizationModal(type) {
