@@ -968,6 +968,11 @@ def describe_scan_problems(response_data, subject):
     skipped = get_skipped_filters(response_data)
     if skipped:
         problems.append(f"Filters skipped on the {subject}: {', '.join(sorted(skipped))}.")
+    if problems and subject == 'image':
+        # Advanced SDP and image screening cannot be used together: with a DLP
+        # inspect/deidentify template configured, every image filter is skipped.
+        problems.append("If the template uses Advanced SDP, switch it to Basic — "
+                        "Advanced SDP is not compatible with image screening.")
     return " ".join(problems) if problems else None
 
 def analyze_image_prompt(prompt, file_data, template_name, location, endpoint_info):

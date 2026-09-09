@@ -885,7 +885,8 @@
                                     <ul class="mb-4">
                                         <li><strong>Responsible AI</strong>: Hate Speech, Dangerous Content, Harassment, Sexually Explicit. All default to <strong>High and above</strong>, so mild content deliberately passes. Lower a threshold to Low or Medium to see it trigger more readily.</li>
                                         <li><strong>Detection</strong>: Prompt Injection &amp; Jailbreak, and Malicious URLs.</li>
-                                        <li><strong>Sensitive Data Protection</strong>: Basic, or Advanced with inspect / de-identify templates. Those two fields are dropdowns listing the templates that exist in the selected region &mdash; hover one to see the infoTypes that trigger it.</li>
+                                        <li><strong>Sensitive Data Protection</strong>: Basic, or Advanced with inspect / de-identify templates. Those two fields are dropdowns listing the templates that exist in the selected region &mdash; hover one to see the infoTypes that trigger it.
+                                            <br><strong class="text-danger">Advanced SDP and image screening cannot be combined.</strong> With a DLP template configured, Model Armor skips every filter on an image and the app blocks the request. Advanced SDP still works for text, including redaction, so use <strong>Basic</strong> when demonstrating images.</li>
                                     </ul>
                                     <p class="mb-4">Templates use the <strong>latest</strong> filter model (currently v3). The version actually used is shown under the analysis panel.</p>
 
@@ -1047,6 +1048,13 @@
                                             </select>
                                         </div>
 
+                                        <div id="sdpImageWarning" class="alert alert-danger py-2 px-2 mb-2"
+                                             style="display:none; font-size:0.75rem;">
+                                            <strong>Advanced SDP disables image screening.</strong>
+                                            With a DLP inspect/de-identify template configured, Model Armor skips every
+                                            filter on images and returns invocationResult=FAILURE. Text screening still
+                                            works, including redaction. Use <strong>Basic</strong> for image demos.
+                                        </div>
                                         <div id="sdpAdvancedFields" style="display: none;">
                                             <div id="sdpUnavailableNote" class="alert alert-warning py-2 px-2 mb-2"
                                                  style="display:none; font-size:0.75rem;"></div>
@@ -1996,11 +2004,11 @@
         function toggleSdpFields() {
             const mode = document.getElementById('customSdpMode').value;
             const advancedFields = document.getElementById('sdpAdvancedFields');
-            
-            if (mode === 'Advanced') {
-                advancedFields.style.display = 'block';
-            } else {
-                advancedFields.style.display = 'none';
+            const imageWarning = document.getElementById('sdpImageWarning');
+
+            advancedFields.style.display = mode === 'Advanced' ? 'block' : 'none';
+            if (imageWarning) {
+                imageWarning.style.display = mode === 'Advanced' ? 'block' : 'none';
             }
         }
 
