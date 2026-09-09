@@ -18,6 +18,7 @@ import asyncio
 import concurrent.futures
 import hashlib
 import time
+from datetime import timezone
 from functools import lru_cache
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -34,26 +35,42 @@ project = os.getenv('GCP_PROJECT_ID')
 
 # --- Authentication Token Cache ---
 auth_token_cache = {}
-TOKEN_TTL = 3300  # 55 minutes (tokens typically last 60 minutes)
+TOKEN_TTL = 3300  # fallback only, for credentials that expose no expiry
+TOKEN_REFRESH_MARGIN = 300  # refresh this many seconds before actual expiry
 
-def get_cached_auth_token():
-    """Get cached authentication token or refresh if expired"""
+def _token_expiry_epoch(credentials, now):
+    """Epoch seconds at which these credentials expire."""
+    expiry = getattr(credentials, 'expiry', None)
+    if not expiry:
+        return now + TOKEN_TTL
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=timezone.utc)
+    return expiry.timestamp()
+
+def get_cached_auth_token(force_refresh=False):
+    """Get a valid access token, refreshing shortly before it actually expires.
+
+    The metadata server returns a token with whatever lifetime it has left
+    rather than a fresh hour, so measuring a fixed TTL from the moment we
+    cached it can keep serving a token that has already expired. Track the
+    credential's real expiry instead.
+    """
     current_time = time.time()
-    
-    if 'token_data' in auth_token_cache:
-        token, timestamp = auth_token_cache['token_data']
-        if current_time - timestamp < TOKEN_TTL:
+
+    cached = auth_token_cache.get('token_data')
+    if cached and not force_refresh:
+        token, expires_at = cached
+        if current_time < expires_at - TOKEN_REFRESH_MARGIN:
             return token
-    
-    # Token expired or doesn't exist, refresh it
+
     credentials, _ = google.auth.default()
     auth_req = google.auth.transport.requests.Request()
     credentials.refresh(auth_req)
-    
-    # Cache the new token
-    auth_token_cache['token_data'] = (credentials.token, current_time)
-    print(f"INFO: Authentication token refreshed and cached")
-    
+
+    expires_at = _token_expiry_epoch(credentials, current_time)
+    auth_token_cache['token_data'] = (credentials.token, expires_at)
+    print(f"INFO: Authentication token refreshed, valid for {int(expires_at - current_time)}s")
+
     return credentials.token
 
 # Add allowed file extensions
@@ -810,6 +827,11 @@ def sanitize_file_prompt_with_rest_api_optimized(file_data_base64, mime_type, te
         }
         
         response = http_client.session.post(url, headers=headers, json=payload, timeout=(5, 30))
+        if response.status_code == 401:
+            # The cached token was rejected. Force a refresh and try once more.
+            print("WARNING: Model Armor returned 401; refreshing token and retrying.")
+            headers["Authorization"] = f"Bearer {get_cached_auth_token(force_refresh=True)}"
+            response = http_client.session.post(url, headers=headers, json=payload, timeout=(5, 30))
         response.raise_for_status()
         result = response.json()
         
