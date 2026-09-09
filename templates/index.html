@@ -1183,10 +1183,9 @@
             });
         }
 
-        // Preload templates for common locations
+        // Preload templates for every offered location
         async function preloadTemplates() {
-            const commonLocations = ['us-central1', 'us-east1'];
-            const promises = commonLocations.map(async location => {
+            const promises = availableLocations().map(async location => {
                 try {
                     const response = await fetch(`/templates/${location}`);
                     const data = await response.json();
@@ -1597,6 +1596,9 @@
         async function updateTemplatesForLocation(newlyUpdatedTemplateName = null) {
             const locationSelect = document.getElementById('locationSelect');
             const location = locationSelect.value;
+            if (!location) {
+                return;   // nothing selected yet; fetching /templates/ would 404
+            }
             const promptSelect = document.getElementById('promptTemplate');
             const responseSelect = document.getElementById('responseTemplate');
 
@@ -2134,8 +2136,18 @@
             }
         });
 
+        // The location list is rendered by the server, so read the default from it
+        // rather than hardcoding a region that may no longer be offered.
+        function availableLocations() {
+            return Array.from(document.getElementById('locationSelect').options)
+                .map(option => option.value)
+                .filter(Boolean);
+        }
+
         window.onload = () => {
-            document.getElementById('locationSelect').value = 'us-central1';
+            const locationSelect = document.getElementById('locationSelect');
+            const locations = availableLocations();
+            locationSelect.value = locations.includes('us') ? 'us' : (locations[0] || '');
             updateTemplatesForLocation();
             checkFileSupport();
             preloadTemplates();
