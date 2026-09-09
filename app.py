@@ -1154,6 +1154,77 @@ def home():
     prompt_templates, response_templates = fetch_model_armor_templates(initial_location, initial_endpoint)
     return render_template('index.html', foundation_models=foundation_models, model_armor_endpoints=model_armor_endpoints, prompt_templates=prompt_templates, response_templates=response_templates)
 
+DLP_ENDPOINT = 'dlp.googleapis.com'
+
+def _dlp_info_types_from_inspect(template):
+    """infoTypes an inspect template looks for. Empty list means DLP defaults."""
+    info_types = (template.get('inspectConfig', {}) or {}).get('infoTypes') or []
+    return [i.get('name') for i in info_types if i.get('name')]
+
+def _dlp_info_types_from_deidentify(template):
+    """infoTypes a deidentify template transforms.
+
+    A transformation with no infoTypes applies to every finding, so report that
+    rather than an empty list that would read as "nothing".
+    """
+    config = template.get('deidentifyConfig', {}) or {}
+    transformations = (config.get('infoTypeTransformations', {}) or {}).get('transformations') or []
+    names, applies_to_all = [], False
+    for transformation in transformations:
+        info_types = transformation.get('infoTypes') or []
+        if not info_types:
+            applies_to_all = True
+        names.extend(i.get('name') for i in info_types if i.get('name'))
+    if applies_to_all and not names:
+        return ['(all findings from the inspect template)']
+    return names
+
+def fetch_dlp_templates(location):
+    """List the SDP inspect and deidentify templates available in one location.
+
+    Model Armor requires the DLP templates it references to live in the same
+    location as the Model Armor template, so only that location is listed.
+    """
+    cache_key = f"dlp_{location}"
+    if cache_key in template_cache:
+        cached_data, timestamp = template_cache[cache_key]
+        if time.time() - timestamp < CACHE_TTL:
+            return cached_data
+
+    headers = {"Authorization": f"Bearer {get_cached_auth_token()}"}
+    base = f"https://{DLP_ENDPOINT}/v2/projects/{project}/locations/{location}"
+    result = {'inspect_templates': [], 'deidentify_templates': []}
+
+    for kind, list_field, extractor in (
+        ('inspectTemplates', 'inspect_templates', _dlp_info_types_from_inspect),
+        ('deidentifyTemplates', 'deidentify_templates', _dlp_info_types_from_deidentify),
+    ):
+        try:
+            resp = http_client.session.get(f"{base}/{kind}", headers=headers, timeout=(5, 30))
+            if resp.status_code != 200:
+                # 404 simply means SDP has no such location (for example eu).
+                print(f"INFO: No {kind} in {location} (HTTP {resp.status_code})")
+                continue
+            for template in resp.json().get(kind, []):
+                template_id = template.get('name', '').split('/')[-1]
+                result[list_field].append({
+                    'id': template_id,
+                    'display_name': template.get('displayName') or template_id,
+                    'info_types': extractor(template),
+                })
+        except Exception as e:
+            print(f"Error listing {kind} in {location}: {e}")
+
+    template_cache[cache_key] = (result, time.time())
+    return result
+
+@app.route('/dlp_templates/<location>')
+def get_dlp_templates_for_location(location):
+    """SDP templates available for the Model Armor location, for the editor dropdowns."""
+    if not any(e['location'] == location for e in model_armor_endpoints):
+        return jsonify({'error': 'Invalid location'}), 400
+    return jsonify(fetch_dlp_templates(location))
+
 @app.route('/templates/<location>')
 def get_templates_for_location(location):
     endpoint_info = next((e for e in model_armor_endpoints if e["location"] == location), None)

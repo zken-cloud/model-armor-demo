@@ -345,6 +345,13 @@
             background-color: #fef7e0;
             color: #b06000;
         }
+        .dlp-hint {
+            display: block;
+            margin-top: 0.25rem;
+            font-size: 0.7rem;
+            line-height: 1.3;
+            word-break: break-word;
+        }
         .filter-version {
             margin-top: 0.5rem;
             font-size: 0.75rem;
@@ -998,11 +1005,19 @@
                                         <div id="sdpAdvancedFields" style="display: none;">
                                             <div class="mb-2">
                                                 <label class="form-label sm">Inspect Template</label>
-                                                <input type="text" class="form-control form-control-sm" id="customInspectTemplate" placeholder="projects/.../inspectTemplates/...">
+                                                <select class="form-select form-select-sm" id="customInspectTemplate"
+                                                        onchange="updateDlpHover('customInspectTemplate')">
+                                                    <option value="">Loading...</option>
+                                                </select>
+                                                <small class="text-muted dlp-hint" id="customInspectTemplateHint"></small>
                                             </div>
                                             <div class="mb-2">
                                                 <label class="form-label sm">Deidentify Template</label>
-                                                <input type="text" class="form-control form-control-sm" id="customDeidentifyTemplate" placeholder="projects/.../deidentifyTemplates/...">
+                                                <select class="form-select form-select-sm" id="customDeidentifyTemplate"
+                                                        onchange="updateDlpHover('customDeidentifyTemplate')">
+                                                    <option value="">Loading...</option>
+                                                </select>
+                                                <small class="text-muted dlp-hint" id="customDeidentifyTemplateHint"></small>
                                             </div>
                                         </div>
                                     </form>
@@ -1356,6 +1371,75 @@
                 }
             }, 250);
         });
+
+        // --- SDP (DLP) template dropdowns ---
+        const dlpTemplateCache = new Map();
+
+        function describeInfoTypes(infoTypes, limit = 12) {
+            if (!infoTypes || !infoTypes.length) {
+                return 'No infoTypes configured - Sensitive Data Protection defaults apply';
+            }
+            const shown = infoTypes.slice(0, limit).join(', ');
+            const rest = infoTypes.length - limit;
+            return rest > 0 ? `${shown} +${rest} more` : shown;
+        }
+
+        function updateDlpHover(selectId) {
+            const select = document.getElementById(selectId);
+            const option = select.options[select.selectedIndex];
+            const detail = option ? (option.dataset.infoTypes || '') : '';
+            // Hovering the control itself shows what will trigger the template.
+            select.title = detail || 'Select a template to see the infoTypes it matches';
+            const hint = document.getElementById(selectId + 'Hint');
+            if (hint) hint.textContent = detail ? `Triggers on: ${detail}` : '';
+        }
+
+        function fillDlpSelect(selectId, templates, currentValue) {
+            const select = document.getElementById(selectId);
+            select.innerHTML = '';
+
+            const none = document.createElement('option');
+            none.value = '';
+            none.textContent = templates.length ? '-- Select a template --' : '-- None available in this region --';
+            select.appendChild(none);
+
+            templates.forEach(t => {
+                const option = document.createElement('option');
+                option.value = t.id;
+                option.textContent = t.display_name === t.id ? t.id : `${t.display_name} (${t.id})`;
+                const detail = describeInfoTypes(t.info_types);
+                option.dataset.infoTypes = detail;
+                option.title = detail;   // hover on the option itself
+                select.appendChild(option);
+            });
+
+            // Keep a value already on the template even if it lives elsewhere.
+            const shortValue = currentValue ? currentValue.split('/').pop() : '';
+            if (shortValue && !templates.some(t => t.id === shortValue)) {
+                const option = document.createElement('option');
+                option.value = shortValue;
+                option.textContent = `${shortValue} (not in this region)`;
+                option.dataset.infoTypes = 'This template is not in the selected region; its infoTypes could not be read';
+                select.appendChild(option);
+            }
+            select.value = shortValue || '';
+            updateDlpHover(selectId);
+        }
+
+        async function loadDlpTemplates(location, inspectValue, deidentifyValue) {
+            let data = dlpTemplateCache.get(location);
+            if (!data) {
+                try {
+                    const response = await fetch(`/dlp_templates/${location}`);
+                    data = await response.json();
+                    dlpTemplateCache.set(location, data);
+                } catch (e) {
+                    data = { inspect_templates: [], deidentify_templates: [] };
+                }
+            }
+            fillDlpSelect('customInspectTemplate', data.inspect_templates || [], inspectValue);
+            fillDlpSelect('customDeidentifyTemplate', data.deidentify_templates || [], deidentifyValue);
+        }
 
         // File handling event listeners
         document.getElementById('fileButton').addEventListener('click', () => {
@@ -1864,7 +1948,7 @@
             }
         }
 
-        function openCustomizationModal(type) {
+        async function openCustomizationModal(type) {
             const selectElement = document.getElementById(`${type}Template`);
             const templateName = selectElement.value;
             const location = document.getElementById('locationSelect').value;
@@ -1920,8 +2004,11 @@
                     
 
                     
-                    document.getElementById('customInspectTemplate').value = config.sdp_settings?.inspect_template || '';
-                    document.getElementById('customDeidentifyTemplate').value = config.sdp_settings?.deidentify_template || '';
+                    await loadDlpTemplates(
+                        document.getElementById('locationSelect').value,
+                        config.sdp_settings?.inspect_template || '',
+                        config.sdp_settings?.deidentify_template || ''
+                    );
                     
                     toggleSdpFields();
                 }
