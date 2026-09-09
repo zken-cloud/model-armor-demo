@@ -461,7 +461,19 @@ def _generate_with_sdk(prompt, model_info, system_instruction, file_data=None):
         contents=[{'role': 'user', 'parts': parts}],
         config=config
     )
-    return response.text
+
+    if response.text:
+        return response.text
+
+    # A thinking model can decline by returning a candidate with no text parts
+    # (and sometimes no finish reason at all). Returning None from here breaks
+    # response screening and the UI, so always hand back a string.
+    finish_reason = None
+    if response.candidates:
+        finish_reason = getattr(response.candidates[0], 'finish_reason', None)
+    print(f"WARNING: {model_info['name']} returned no text (finish_reason={finish_reason}).")
+    detail = f" (finish reason: {finish_reason})" if finish_reason else ""
+    return f"[The model returned no content{detail}.]"
 
 def generate_model_response(prompt, model_info, system_instruction, file_data=None):
     """Original generation function using SDK"""
