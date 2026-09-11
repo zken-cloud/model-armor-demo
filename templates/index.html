@@ -5,10 +5,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GenAI Chatbot With Model Armor Demo</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/showdown/2.1.0/showdown.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.9/purify.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-9ndCyUaIbzAi2FUVXJi0CjmCapSmO7SnpJef0486qhLnuZ2cdeRhO02iuK6FUUVM" crossorigin="anonymous">
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js" integrity="sha384-geWF76RCwLtnZ8qwWowPQNguL3RmwHVBC9FhGdlKrxdiJJigb/j/68SIy3Te4Bkz" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/showdown/2.1.0/showdown.min.js" integrity="sha384-GP2+CwBlakZSDJUr+E4JvbxpM75i1i8+RKkieQxzuyDZLG+5105E1OfHIjzcXyWH" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.9/purify.min.js" integrity="sha384-3HPB1XT51W3gGRxAmZ+qbZwRpRlFQL632y8x+adAqCr4Wp3TaWwCLSTAJJKbyWEK" crossorigin="anonymous"></script>
     <style>
         :root {
             --google-blue: #4285f4;
@@ -17,9 +17,6 @@
             --google-green: #34a853;
             --google-gray: #5f6368;
             --google-light-gray: #f8f9fa;
-            --resize-handle-width: 8px;
-            --resize-handle-color: #e0e0e0;
-            --resize-handle-hover-color: #4285f4;
         }
 
         body {
@@ -112,56 +109,6 @@
             margin-left: 0;
             overflow: hidden;
             border: none;
-        }
-
-        /* Resize handles */
-        .resize-handle {
-            width: var(--resize-handle-width);
-            cursor: col-resize;
-            background-color: transparent;
-            position: relative;
-            user-select: none;
-            transition: background-color 0.2s;
-            flex-shrink: 0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-
-        .resize-handle:hover {
-            background-color: var(--resize-handle-hover-color);
-            opacity: 0.3;
-        }
-
-        .resize-handle.dragging {
-            background-color: var(--resize-handle-hover-color);
-            opacity: 0.5;
-        }
-
-        .resize-handle::before {
-            content: '';
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            width: 2px;
-            height: 30px;
-            background-color: var(--resize-handle-color);
-            border-radius: 1px;
-        }
-
-        #sidebar-resize-handle {
-            position: absolute;
-            right: -4px;
-            top: 0;
-            bottom: 0;
-            z-index: 100;
-        }
-
-        #chat-resize-handle {
-            margin: 0 0.5rem;
-            display: none;
-            /* Hiding resize handle for now as we use flex ratios */
         }
 
         h1,
@@ -433,18 +380,8 @@
             z-index: 1000;
         }
 
-        /* Ensure resize handles are not affected by other styles */
-        .resize-handle {
-            box-sizing: border-box;
-        }
-
         /* Mobile responsive styles */
         @media (max-width: 768px) {
-
-            /* Disable resize handles on mobile */
-            .resize-handle {
-                display: none;
-            }
 
             body {
                 overflow: auto;
@@ -504,12 +441,6 @@
                 overflow: hidden;
                 min-height: 0;
                 border: none;
-            }
-
-            /* Header improvements */
-            .header {
-                flex-wrap: wrap;
-                padding: 0.5rem;
             }
 
             h1 {
@@ -1167,6 +1098,13 @@
 
         const converter = new showdown.Converter();
 
+        // For the few places that still build HTML from strings.
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
         // Template cache for performance
         const templateCache = new Map();
 
@@ -1207,19 +1145,6 @@
             }
         }
 
-        // Optimized file reading
-        async function optimizedFileRead(file) {
-            return new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onload = () => {
-                    const base64 = reader.result.split(',')[1];
-                    resolve(base64);
-                };
-                reader.onerror = reject;
-                reader.readAsDataURL(file);
-            });
-        }
-
         // Preload templates for every offered location
         async function preloadTemplates() {
             const promises = availableLocations().map(async location => {
@@ -1246,13 +1171,13 @@
             promptSelect.innerHTML = '<option value="">No template</option>';
             data.prompt_templates.forEach(t => {
                 promptTemplatesMap.set(t.name, t);
-                promptSelect.innerHTML += `<option value="${t.name}" data-updated="${t.last_updated}" data-supports-images="${t.supports_images ? 'true' : 'false'}">${t.display_name}${t.supports_images ? ' 🖼' : ''}</option>`;
+                promptSelect.innerHTML += `<option value="${escapeHtml(t.name)}" data-updated="${escapeHtml(t.last_updated)}" data-supports-images="${t.supports_images ? 'true' : 'false'}">${escapeHtml(t.display_name)}${t.supports_images ? ' 🖼' : ''}</option>`;
             });
  
             responseSelect.innerHTML = '<option value="">No template</option>';
             data.response_templates.forEach(t => {
                 responseTemplatesMap.set(t.name, t);
-                responseSelect.innerHTML += `<option value="${t.name}" data-updated="${t.last_updated}" data-supports-images="${t.supports_images ? 'true' : 'false'}">${t.display_name}</option>`;
+                responseSelect.innerHTML += `<option value="${escapeHtml(t.name)}" data-updated="${escapeHtml(t.last_updated)}" data-supports-images="${t.supports_images ? 'true' : 'false'}">${escapeHtml(t.display_name)}</option>`;
             });
  
             // Explicitly set values to preserve selection or default to "No template"
@@ -1318,7 +1243,7 @@
                 configHTML += '<div class="config-section"><strong>🛡️ Responsible AI Filters:</strong><ul>';
                 if (config.rai_filters && config.rai_filters.length > 0) {
                     config.rai_filters.forEach(filter => {
-                        configHTML += `<li>${filter}</li>`;
+                        configHTML += `<li>${escapeHtml(filter)}</li>`;
                     });
                 } else {
                     configHTML += '<li>Not Configured</li>';
@@ -1330,7 +1255,7 @@
                 
                 // PI & Jailbreak
                 const hasPiJb = config.detection_filters && config.detection_filters.some(f => f.includes('Prompt Injection & Jailbreak'));
-                configHTML += `<li>Prompt Injection & Jailbreak: ${hasPiJb ? 'Enabled' : 'Disabled'}</li>`;
+                configHTML += `<li>Prompt Injection & Jailbreak: ${escapeHtml(hasPiJb ? 'Enabled' : 'Disabled')}</li>`;
                 
                 // Malicious URL
                 const hasMalUrls = config.detection_filters && config.detection_filters.some(f => f.includes('Malicious URL'));
@@ -1338,11 +1263,11 @@
  
                 // Display SDP Settings
                 configHTML += '<div class="config-section"><strong>🔒 Sensitive Data Protection:</strong><ul>';
-                configHTML += `<li>Mode: ${config.sdp_settings?.mode || 'Not Configured'}</li>`;
-                configHTML += `<li>Inspect Template: ${config.sdp_settings?.inspect_template || 'None'}</li>`;
-                configHTML += `<li>Deidentify Template: ${config.sdp_settings?.deidentify_template || 'None'}</li>`;
+                configHTML += `<li>Mode: ${escapeHtml(config.sdp_settings?.mode || 'Not Configured')}</li>`;
+                configHTML += `<li>Inspect Template: ${escapeHtml(config.sdp_settings?.inspect_template || 'None')}</li>`;
+                configHTML += `<li>Deidentify Template: ${escapeHtml(config.sdp_settings?.deidentify_template || 'None')}</li>`;
                 if (config.sdp_settings?.info_types) {
-                    configHTML += `<li>Info Types: ${config.sdp_settings.info_types.join(', ')}</li>`;
+                    configHTML += `<li>Info Types: ${escapeHtml(config.sdp_settings.info_types.join(', '))}</li>`;
                 }
                 configHTML += '</ul></div>';
  
@@ -1359,8 +1284,8 @@
             }
 
             popup.innerHTML = `
-                <h4>${templateData.display_name}</h4>
-                <p class="template-meta"><strong>Last Updated:</strong> ${templateData.last_updated}</p>
+                <h4>${escapeHtml(templateData.display_name)}</h4>
+                <p class="template-meta"><strong>Last Updated:</strong> ${escapeHtml(templateData.last_updated)}</p>
                 ${configHTML}
             `;
             popup.style.display = 'block';
@@ -1748,7 +1673,7 @@
                     }
                 } catch (error) {
                     const promptContent = document.getElementById('promptAnalysisContent');
-                    promptContent.innerHTML = `<div class="analysis-card fail"><span class="analysis-icon">❌</span><span class="analysis-text">Prompt analysis failed: ${error.message}</span></div>`;
+                    promptContent.innerHTML = `<div class="analysis-card fail"><span class="analysis-icon">❌</span><span class="analysis-text">Prompt analysis failed: ${escapeHtml(error.message)}</span></div>`;
                 }
             }
 
@@ -1906,124 +1831,6 @@
         }
 
         // Resizable panels functionality
-        function initResizablePanels() {
-            const sidebar = document.getElementById('sidebar');
-            const chatSection = document.querySelector('.chat-section');
-            const modelArmorSection = document.querySelector('.model-armor-section');
-            const sidebarHandle = document.getElementById('sidebar-resize-handle');
-            const chatHandle = document.getElementById('chat-resize-handle');
-            const appContainer = document.getElementById('app-container');
-
-            console.log('Initializing resizable panels...');
-            console.log('Sidebar:', sidebar);
-            console.log('Sidebar handle:', sidebarHandle);
-            console.log('Chat handle:', chatHandle);
-            console.log('Chat section:', chatSection);
-            console.log('Model Armor section:', modelArmorSection);
-
-            let isResizing = false;
-            let currentHandle = null;
-            let startX = 0;
-            let startWidth = 0;
-            let startSidebarWidth = 0;
-            let startChatWidth = 0;
-
-            // Check if elements exist
-            if (!sidebarHandle || !chatHandle) {
-                console.error('Resize handles not found in DOM');
-                console.error('sidebarHandle:', sidebarHandle);
-                console.error('chatHandle:', chatHandle);
-                return;
-            }
-
-            // Sidebar resize
-            sidebarHandle.addEventListener('mousedown', (e) => {
-                console.log('Sidebar handle mousedown event');
-                if (sidebar.classList.contains('collapsed')) {
-                    console.log('Sidebar is collapsed, ignoring resize');
-                    return;
-                }
-
-                isResizing = true;
-                currentHandle = 'sidebar';
-                startX = e.clientX;
-                startSidebarWidth = sidebar.offsetWidth;
-                console.log('Starting sidebar resize, width:', startSidebarWidth);
-                sidebarHandle.classList.add('dragging');
-                document.body.style.cursor = 'col-resize';
-                document.body.style.userSelect = 'none';
-                e.preventDefault();
-            });
-
-            // Chat/Model Armor resize
-            chatHandle.addEventListener('mousedown', (e) => {
-                console.log('Chat handle mousedown event');
-                isResizing = true;
-                currentHandle = 'chat';
-                startX = e.clientX;
-                startChatWidth = chatSection.offsetWidth;
-                console.log('Starting chat resize, width:', startChatWidth);
-                chatHandle.classList.add('dragging');
-                document.body.style.cursor = 'col-resize';
-                document.body.style.userSelect = 'none';
-                e.preventDefault();
-            });
-
-            document.addEventListener('mousemove', (e) => {
-                if (!isResizing) return;
-
-                const deltaX = e.clientX - startX;
-                console.log('Mouse move, deltaX:', deltaX);
-
-                if (currentHandle === 'sidebar') {
-                    const newWidth = Math.max(200, Math.min(600, startSidebarWidth + deltaX));
-                    console.log('Setting sidebar width to:', newWidth);
-                    sidebar.style.width = newWidth + 'px';
-                } else if (currentHandle === 'chat') {
-                    const containerWidth = appContainer.offsetWidth - sidebar.offsetWidth;
-                    const newChatWidth = startChatWidth + deltaX;
-                    const newModelArmorWidth = containerWidth - newChatWidth - chatHandle.offsetWidth - 32; // 32px for padding
-
-                    console.log('New chat width:', newChatWidth, 'New model armor width:', newModelArmorWidth);
-
-                    if (newChatWidth >= 300 && newModelArmorWidth >= 300 && newModelArmorWidth <= 800) {
-                        chatSection.style.flex = 'none';
-                        chatSection.style.width = newChatWidth + 'px';
-                        modelArmorSection.style.width = newModelArmorWidth + 'px';
-                    }
-                }
-            });
-
-            document.addEventListener('mouseup', () => {
-                if (isResizing) {
-                    isResizing = false;
-                    currentHandle = null;
-                    document.body.style.cursor = '';
-                    document.body.style.userSelect = '';
-                    sidebarHandle.classList.remove('dragging');
-                    chatHandle.classList.remove('dragging');
-
-                    // Save panel widths to localStorage
-                    localStorage.setItem('sidebarWidth', sidebar.style.width);
-                    localStorage.setItem('chatWidth', chatSection.style.width);
-                    localStorage.setItem('modelArmorWidth', modelArmorSection.style.width);
-                }
-            });
-
-            // Restore saved widths
-            const savedSidebarWidth = localStorage.getItem('sidebarWidth');
-            const savedChatWidth = localStorage.getItem('chatWidth');
-            const savedModelArmorWidth = localStorage.getItem('modelArmorWidth');
-
-            if (savedSidebarWidth && !sidebar.classList.contains('collapsed')) {
-                sidebar.style.width = savedSidebarWidth;
-            }
-            if (savedChatWidth && savedModelArmorWidth) {
-                chatSection.style.flex = 'none';
-                chatSection.style.width = savedChatWidth;
-                modelArmorSection.style.width = savedModelArmorWidth;
-            }
-        }
 
         const templateCustomizationModal = new bootstrap.Modal(document.getElementById('templateCustomizationModal'));
 
@@ -2216,30 +2023,6 @@
             updateTemplatesForLocation();
             checkFileSupport();
             preloadTemplates();
-
-            // Initialize resizable panels after DOM is ready
-            setTimeout(() => {
-                try {
-                    initResizablePanels();
-                    console.log('Resizable panels initialization complete');
-
-                    // Test resize functionality
-                    const sidebar = document.getElementById('sidebar');
-                    const sidebarHandle = document.getElementById('sidebar-resize-handle');
-                    const chatHandle = document.getElementById('chat-resize-handle');
-
-                    if (sidebarHandle && chatHandle) {
-                        console.log('✓ Resize handles found');
-                        console.log('✓ Sidebar initial width:', sidebar.offsetWidth + 'px');
-                        console.log('✓ To test: Look for subtle vertical lines between panels');
-                        console.log('✓ Hover over them (they should highlight) and drag to resize');
-                    } else {
-                        console.error('✗ Resize handles not found');
-                    }
-                } catch (error) {
-                    console.error('Error initializing resizable panels:', error);
-                }
-            }, 500);
         };
 
     </script>

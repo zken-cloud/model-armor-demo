@@ -4,6 +4,7 @@ import os
 import re
 import requests
 import google.auth
+import google.auth.transport.requests
 from flask import Flask, render_template, request, jsonify
 from dotenv import load_dotenv
 import base64
@@ -15,6 +16,7 @@ import asyncio
 import hashlib
 import time
 from datetime import timezone
+from urllib.parse import urlparse
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -25,6 +27,51 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max upload size
 
 # --- Jinja2 Configuration for XSS Protection --
 app.jinja_env.autoescape = True
+
+# Scripts and styles are inline in the template, so 'unsafe-inline' is needed
+# for those two directives; every other source is pinned to self or the two
+# CDNs the page loads from (each of which also carries an SRI hash).
+CONTENT_SECURITY_POLICY = "; ".join([
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com",
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
+    "img-src 'self' data:",
+    "font-src 'self' data:",
+    "connect-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+])
+
+@app.after_request
+def set_security_headers(response):
+    response.headers['Content-Security-Policy'] = CONTENT_SECURITY_POLICY
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=()'
+    return response
+
+@app.before_request
+def reject_cross_origin_writes():
+    """Cheap CSRF guard: a browser always sends Origin on a cross-site POST.
+
+    The app sits behind IAP, whose session cookie would otherwise be replayed
+    by a malicious page to hit /update_template or /chat. Non-browser clients
+    send no Origin header and are unaffected.
+    """
+    if request.method not in ('POST', 'PUT', 'PATCH', 'DELETE'):
+        return None
+    origin = request.headers.get('Origin')
+    if not origin:
+        return None
+    # Compare hosts only: behind the load balancer Flask sees plain http while
+    # the browser's Origin says https, and the LB only serves https anyway.
+    origin_host = urlparse(origin).netloc
+    if origin_host != request.host:
+        return jsonify({'error': 'Cross-origin requests are not allowed'}), 403
+    return None
 
 project = os.getenv('GCP_PROJECT_ID')
 
@@ -610,22 +657,14 @@ def fetch_model_armor_templates(location, endpoint):
     
     local_prompt_templates, local_response_templates = [], []
     try:
-        import google.auth
-        from google.auth.transport.requests import Request
-        import requests
-        
-        credentials, _ = google.auth.default()
-        credentials.refresh(Request())
-        token = credentials.token
-        
         url = f"https://{endpoint}/v1/projects/{project}/locations/{location}/templates"
         headers = {
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {get_cached_auth_token()}",
             "Content-Type": "application/json"
         }
         
         print(f"Fetching templates from {url}...", flush=True)
-        resp = requests.get(url, headers=headers)
+        resp = http_client.session.get(url, headers=headers, timeout=(5, 30))
         if resp.status_code != 200:
             print(f"Failed to list templates from {location}: {resp.text}")
             return [], []
@@ -1474,18 +1513,9 @@ def update_template():
         if template_metadata:
             payload['templateMetadata'] = template_metadata
 
-        # Make direct REST API call
-        import google.auth
-        from google.auth.transport.requests import Request
-        import requests
-        
-        credentials, _ = google.auth.default()
-        credentials.refresh(Request())
-        token = credentials.token
-        
         url = f"https://{endpoint_info['endpoint']}/v1/{name}"
         headers = {
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {get_cached_auth_token()}",
             "Content-Type": "application/json"
         }
         
@@ -1495,7 +1525,7 @@ def update_template():
         print(f"Patching template to {url}...", flush=True)
         print(f"Payload: {payload}", flush=True)
         
-        resp = requests.patch(url, headers=headers, json=payload)
+        resp = http_client.session.patch(url, headers=headers, json=payload, timeout=(5, 30))
         print(f"Patch status: {resp.status_code}", flush=True)
         
         if resp.status_code != 200:
@@ -1622,4 +1652,6 @@ def chat():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
-    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
+    # Cloud Run routes traffic to the container over 0.0.0.0; this block only
+    # runs for local development, gunicorn serves it in the image.
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)  # nosec B104
