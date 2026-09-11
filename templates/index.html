@@ -851,7 +851,7 @@
                                 <div class="modal-body">
                                     <!-- Template Descriptions -->
                                     <h4 class="mb-3">🛡️ Model Armor Templates</h4>
-                                    <p>The application automatically provisions and uses dedicated templates for this demo:</p>
+                                    <p>The application provisions two pairs of templates in the <strong>us</strong> multi-region, each with a prompt and a response variant. Every filter starts at <strong>High and above</strong> on the <strong>latest</strong> filter model; after that, whatever you change in the editor stays.</p>
                                     <div class="table-responsive mb-4">
                                         <table class="table table-bordered">
                                             <thead class="table-light">
@@ -862,23 +862,32 @@
                                             </thead>
                                             <tbody>
                                                 <tr>
-                                                    <td><strong>modelarmor-demo-prompt</strong></td>
-                                                    <td>Used for analyzing user prompts before sending them to the model.</td>
+                                                    <td><strong>US Image Capable</strong> 🖼<br><small class="text-muted">modelarmor-demo-us-image-prompt / -response</small></td>
+                                                    <td>Text <em>and</em> image input. Basic Sensitive Data Protection, so findings are reported but not redacted. Use this one for the image demos.</td>
                                                 </tr>
                                                 <tr>
-                                                    <td><strong>modelarmor-demo-response</strong></td>
-                                                    <td>Used for analyzing model responses before displaying them.</td>
+                                                    <td><strong>US Advanced DLP (text only)</strong><br><small class="text-muted">modelarmor-demo-us-dlp-prompt / -response</small></td>
+                                                    <td>Text input only. Advanced Sensitive Data Protection wired to your own DLP inspect and de-identify templates, so sensitive values are <em>redacted</em> before the model sees them (and again on the way back). Sending an image with this template selected is blocked, because de-identification is not supported for image input.</td>
                                                 </tr>
                                             </tbody>
                                         </table>
                                     </div>
 
-                                    <h4 class="mb-3">🌍 Locations</h4>
-                                    <p>Only the <strong>us</strong> and <strong>eu</strong> multi-regions are offered, because image screening runs there and nowhere else.</p>
-                                    <ul class="mb-4">
-                                        <li><strong>Basic SDP</strong> works in both.</li>
-                                        <li><strong>Advanced SDP</strong> (your own inspect / de-identify templates) works in <strong>us</strong> only. Model Armor requires the Sensitive Data Protection templates to sit in the same location as the Model Armor template, and Sensitive Data Protection has a <code>us</code> location but no <code>eu</code> one &mdash; its EU multi-region is called <code>europe</code>. Selecting Advanced in eu shows a note explaining this.</li>
-                                    </ul>
+                                    <h4 class="mb-3">🌍 Location</h4>
+                                    <p class="mb-4">Everything runs in the <strong>us</strong> multi-region. Image screening needs a multi-region, and Advanced SDP needs the DLP templates to live in the same location as the Model Armor template &mdash; Sensitive Data Protection has a <code>us</code> location but no <code>eu</code> one, so us is the only place both features work.</p>
+
+                                    <h4 class="mb-3">🧭 Which template for which demo</h4>
+                                    <div class="table-responsive mb-4">
+                                        <table class="table table-bordered table-sm">
+                                            <thead class="table-light"><tr><th style="width: 40%;">You want to show</th><th>Select</th></tr></thead>
+                                            <tbody>
+                                                <tr><td>An image being screened (jailbreak, PII, malicious URL read out of a picture)</td><td><strong>US Image Capable</strong> as the prompt template</td></tr>
+                                                <tr><td>PII being <em>redacted</em> from a text prompt before the model sees it</td><td><strong>US Advanced DLP</strong> as the prompt template</td></tr>
+                                                <tr><td>PII being redacted from the <em>model's answer</em></td><td><strong>US Advanced DLP</strong> as the response template (works with either prompt template)</td></tr>
+                                                <tr><td>A prompt blocked outright with a canned reply</td><td>Either template, with <strong>Use default</strong> on</td></tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
 
                                     <h4 class="mb-3">⚙️ Customization</h4>
                                     <p>Click <strong>Edit</strong> next to either template dropdown to change:</p>
@@ -894,7 +903,7 @@
                                             </ul>
                                             Clear De-identify on the prompt template when demonstrating images, and put it on the response template to demonstrate redaction.</li>
                                     </ul>
-                                    <p class="mb-4">Templates use the <strong>latest</strong> filter model (currently v3). The version actually used is shown under the analysis panel.</p>
+                                    <p class="mb-4"><strong>Model Armor Filter Version</strong> is a dropdown at the top of the editor: the <em>Latest</em> alias (v3 today), the <em>Stable</em> alias (v1 today, moving to v3 on 25&nbsp;Sep&nbsp;2026), or a pinned <em>v3</em> / <em>v1</em>. v1 retires on 29&nbsp;Nov&nbsp;2026. The version actually used is shown under the analysis panel after each request, so you can switch and compare detections live.</p>
 
                                     <h4 class="mb-3">⚠️ Sample Prompts</h4>
                                     <p>Each of these is verified to trigger at the default High threshold. Paste one into the chat box and send.</p>
@@ -979,7 +988,18 @@
                                     <form id="templateCustomizationForm">
                                         <input type="hidden" id="customTemplateName">
                                         <input type="hidden" id="customLocation">
-                                        
+
+                                        <div class="mb-3">
+                                            <label class="form-label">Model Armor Filter Version</label>
+                                            <select class="form-select" id="customFilterVersion">
+                                                <option value="FILTER_VERSION_ALIAS_LATEST">Latest alias (currently v3)</option>
+                                                <option value="FILTER_VERSION_ALIAS_STABLE">Stable alias (currently v1; v3 from 25 Sep 2026)</option>
+                                                <option value="v3">v3 &mdash; pinned</option>
+                                                <option value="v1">v1 &mdash; pinned, retires 29 Nov 2026</option>
+                                            </select>
+                                            <small class="text-muted">Applies to every filter on this template. The version actually used is shown under the analysis panel after each request.</small>
+                                        </div>
+
                                         <div class="mb-3">
                                             <label class="form-label">Prompt Injection & Jailbreak</label>
                                             <select class="form-select mb-2" id="customPiJailbreak">
@@ -1226,13 +1246,13 @@
             promptSelect.innerHTML = '<option value="">No template</option>';
             data.prompt_templates.forEach(t => {
                 promptTemplatesMap.set(t.name, t);
-                promptSelect.innerHTML += `<option value="${t.name}" data-updated="${t.last_updated}">${t.display_name}</option>`;
+                promptSelect.innerHTML += `<option value="${t.name}" data-updated="${t.last_updated}" data-supports-images="${t.supports_images ? 'true' : 'false'}">${t.display_name}${t.supports_images ? ' 🖼' : ''}</option>`;
             });
  
             responseSelect.innerHTML = '<option value="">No template</option>';
             data.response_templates.forEach(t => {
                 responseTemplatesMap.set(t.name, t);
-                responseSelect.innerHTML += `<option value="${t.name}" data-updated="${t.last_updated}">${t.display_name}</option>`;
+                responseSelect.innerHTML += `<option value="${t.name}" data-updated="${t.last_updated}" data-supports-images="${t.supports_images ? 'true' : 'false'}">${t.display_name}</option>`;
             });
  
             // Explicitly set values to preserve selection or default to "No template"
@@ -1525,10 +1545,13 @@
             return IMAGE_EXTENSIONS.includes(file.name.split('.').pop().toLowerCase());
         }
 
-        function currentLocationSupportsImages() {
-            const select = document.getElementById('locationSelect');
+        // Image capability is a property of the selected prompt template
+        // (its modalities), not of the region.
+        function selectedPromptTemplateSupportsImages() {
+            const select = document.getElementById('promptTemplate');
             const option = select.options[select.selectedIndex];
-            return option ? option.getAttribute('data-supports-images') === 'true' : false;
+            if (!option || !option.value) return true;   // no screening at all
+            return option.getAttribute('data-supports-images') === 'true';
         }
 
         document.getElementById('fileInput').addEventListener('change', (e) => {
@@ -1542,9 +1565,10 @@
                     e.target.value = '';
                     return;
                 }
-                if (!currentLocationSupportsImages()) {
-                    alert('Image screening is only available in the us and eu multi-regions. ' +
-                          'Switch the Model Armor Location before sending an image.');
+                if (!selectedPromptTemplateSupportsImages()) {
+                    alert('The selected prompt template is text-only, so Model Armor will not screen ' +
+                          'this image and the request will be blocked. Pick the "US Image Capable" ' +
+                          'prompt template to send images.');
                 }
             }
 
@@ -2063,6 +2087,16 @@
                     const hasPiJb = config.detection_filters && config.detection_filters.some(f => f.includes('Prompt Injection & Jailbreak'));
                     document.getElementById('customPiJailbreak').value = hasPiJb ? 'ENABLED' : 'DISABLED';
                     
+                    const versionSelect = document.getElementById('customFilterVersion');
+                    const currentVersion = config.other_settings?.filter_version || 'FILTER_VERSION_ALIAS_LATEST';
+                    if (![...versionSelect.options].some(o => o.value === currentVersion)) {
+                        // keep whatever the template has, even if it is not one we offer
+                        const extra = document.createElement('option');
+                        extra.value = currentVersion; extra.textContent = currentVersion;
+                        versionSelect.appendChild(extra);
+                    }
+                    versionSelect.value = currentVersion;
+
                     const piJbConfidence = config.other_settings?.pi_jb_confidence
                         || 'DETECTION_CONFIDENCE_LEVEL_UNSPECIFIED';
                     document.getElementById('customPiJailbreakConfidence').value = piJbConfidence;
@@ -2129,6 +2163,7 @@
             }
 
             const config = {
+                filter_version: document.getElementById('customFilterVersion').value,
                 pi_and_jailbreak: piJailbreak,
                 malicious_uris: maliciousUrls,
                 pi_jb_confidence: piJbConfidence,

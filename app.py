@@ -5,7 +5,6 @@ import re
 import requests
 import google.auth
 from flask import Flask, render_template, request, jsonify
-from google.cloud import modelarmor_v1
 from dotenv import load_dotenv
 import base64
 from werkzeug.utils import secure_filename
@@ -196,15 +195,7 @@ def cache_result(cache_key, result):
             del model_armor_cache[k]
 
 # --- Client Caching ---
-model_armor_clients = {}
 genai_clients = {}
-
-def get_model_armor_client(location, endpoint):
-    if location not in model_armor_clients:
-        model_armor_clients[location] = modelarmor_v1.ModelArmorClient(
-            transport="rest", client_options={"api_endpoint": endpoint}
-        )
-    return model_armor_clients[location]
 
 def get_genai_client(location):
     if location not in genai_clients:
@@ -215,14 +206,6 @@ def pre_initialize_clients():
     """Pre-initializes all necessary API clients to prevent cold start issues."""
     print("INFO: Pre-initializing all API clients...")
     
-    # Pre-warm Model Armor clients
-    for endpoint_info in model_armor_endpoints:
-        try:
-            get_model_armor_client(endpoint_info['location'], endpoint_info['endpoint'])
-            print(f"  - Successfully initialized Model Armor client for {endpoint_info['location']}")
-        except Exception as e:
-            print(f"  - WARNING: Failed to initialize Model Armor client for {endpoint_info['location']}: {e}")
-            
     # Pre-warm Generative AI clients
     unique_locations = {model.get('location', 'us-central1') for model in foundation_models}
     for location in unique_locations:
@@ -235,19 +218,13 @@ def pre_initialize_clients():
     print("INFO: All API clients pre-initialization complete.")
 
 
-# Only the us and eu multi-regions are offered: image screening is unavailable
-# on regional endpoints, which return invocationResult=FAILURE for IMAGE payloads.
-#
-# Advanced SDP needs the DLP templates to sit in the same location as the Model
-# Armor template. Sensitive Data Protection has a "us" location but no "eu" one
-# (its EU multi-region is called "europe"), so advanced SDP can be used from us
-# but not from eu. sdp_location records the matching DLP location, or None when
-# there is none.
+# Only the us multi-region is offered. Image screening needs a multi-region, and
+# advanced SDP needs the DLP templates in the same location as the Model Armor
+# template; Sensitive Data Protection has a "us" location but no "eu" one, so
+# us is the only place both features work.
 model_armor_endpoints = [
     {"location": "us", "endpoint": "modelarmor.us.rep.googleapis.com",
      "display_name": "us (multi-region)", "supports_images": True, "sdp_location": "us"},
-    {"location": "eu", "endpoint": "modelarmor.eu.rep.googleapis.com",
-     "display_name": "eu (multi-region)", "supports_images": True, "sdp_location": None},
 ]
 
 generation_config = types.GenerateContentConfig(
@@ -264,18 +241,45 @@ foundation_models = [
     {"name": "gemini-3.8-flash", "provider": "Google", "location": "global", "display_name": "gemini-3.8-flash"},
 ]
 
-# Demo template defaults: every filter at "High and above", the latest filter
-# model for PI/Jailbreak (and RAI), and both modalities where images are supported.
+# Demo template defaults: every filter at "High and above" and the latest filter
+# model. Each spec below is provisioned as a -prompt and a -response template.
 DEFAULT_CONFIDENCE_LEVEL = 'HIGH'
 DEFAULT_FILTER_VERSION_ALIAS = 'FILTER_VERSION_ALIAS_LATEST'
 DEFAULT_RAI_FILTER_TYPES = ['HATE_SPEECH', 'DANGEROUS', 'HARASSMENT', 'SEXUALLY_EXPLICIT']
 
-def build_default_template_payload(supports_images):
-    """Default demo template body. filterVersionSelector is REST-only (absent from the SDK)."""
-    modalities = ['MODALITY_TEXT']
-    if supports_images:
-        modalities.append('MODALITY_IMAGE')
+# DLP templates the advanced-SDP demo template points at. De-identification is
+# not supported for image input, so that template is text-only by design.
+US_DLP_INSPECT_TEMPLATE = os.getenv(
+    'MODEL_ARMOR_DLP_INSPECT_TEMPLATE',
+    f"projects/{project}/locations/us/inspectTemplates/AS-MA-DLP-INS-US")
+US_DLP_DEIDENTIFY_TEMPLATE = os.getenv(
+    'MODEL_ARMOR_DLP_DEIDENTIFY_TEMPLATE',
+    f"projects/{project}/locations/us/deidentifyTemplates/AS-MA-DLP-DEID-US")
 
+DEMO_TEMPLATES = [
+    {
+        'id': 'modelarmor-demo-us-image',
+        'display_name': 'US Image Capable',
+        'modalities': ['MODALITY_TEXT', 'MODALITY_IMAGE'],
+        'sdp': {'basicConfig': {'filterEnforcement': 'ENABLED'}},
+    },
+    {
+        'id': 'modelarmor-demo-us-dlp',
+        'display_name': 'US Advanced DLP (text only)',
+        'modalities': ['MODALITY_TEXT'],
+        'sdp': {'advancedConfig': {
+            'inspectTemplate': US_DLP_INSPECT_TEMPLATE,
+            'deidentifyTemplate': US_DLP_DEIDENTIFY_TEMPLATE,
+        }},
+    },
+]
+DEMO_TEMPLATE_DISPLAY_NAMES = {
+    f"{spec['id']}-{kind}": spec['display_name']
+    for spec in DEMO_TEMPLATES for kind in ('prompt', 'response')
+}
+
+def build_template_payload(spec):
+    """Template body for one demo spec. filterVersionSelector is REST-only (absent from the SDK)."""
     return {
         'filterConfig': {
             'raiSettings': {
@@ -289,10 +293,10 @@ def build_default_template_payload(supports_images):
                 'confidenceLevel': DEFAULT_CONFIDENCE_LEVEL,
             },
             'maliciousUriFilterSettings': {'filterEnforcement': 'ENABLED'},
-            'sdpSettings': {'basicConfig': {'filterEnforcement': 'ENABLED'}},
+            'sdpSettings': spec['sdp'],
         },
         'templateMetadata': {
-            'modalities': modalities,
+            'modalities': list(spec['modalities']),
             'filterVersionSelector': {'alias': DEFAULT_FILTER_VERSION_ALIAS},
             'logTemplateOperations': True,
             'logSanitizeOperations': True,
@@ -310,32 +314,18 @@ def extract_unsupported_capabilities(resp):
         pass
     return set()
 
-def reconcile_demo_template(base_url, template_id, existing, supports_images, headers):
-    """Bring an existing demo template up to the demo defaults.
+def reconcile_demo_template(base_url, template_id, existing, spec, headers):
+    """Keep an existing demo template structurally matched to its spec.
 
-    Only touches the fields the demo owns (RAI confidence, PI/Jailbreak, filter
-    version, modalities). SDP and malicious-URI settings are left alone so any
-    per-region customisation survives a restart.
+    Only the modalities are enforced: they define what the template is for
+    (image-capable or text-only). Filter thresholds, filter version and SDP are
+    set on creation and then left to the editor, so a restart never reverts
+    a deliberate change.
     """
-    defaults = build_default_template_payload(supports_images)
+    defaults = build_template_payload(spec)
     existing_filters = existing.get('filterConfig', {})
     existing_meta = existing.get('templateMetadata', {})
     filter_config, metadata, update_mask = {}, {}, []
-
-    rai_filters = existing_filters.get('raiSettings', {}).get('raiFilters', [])
-    if not rai_filters or any(f.get('confidenceLevel') != DEFAULT_CONFIDENCE_LEVEL for f in rai_filters):
-        filter_config['raiSettings'] = defaults['filterConfig']['raiSettings']
-        update_mask.append('filterConfig.raiSettings')
-
-    pi_jb = existing_filters.get('piAndJailbreakFilterSettings', {})
-    if (pi_jb.get('confidenceLevel') != DEFAULT_CONFIDENCE_LEVEL
-            or pi_jb.get('filterEnforcement') != 'ENABLED'):
-        filter_config['piAndJailbreakFilterSettings'] = defaults['filterConfig']['piAndJailbreakFilterSettings']
-        update_mask.append('filterConfig.piAndJailbreakFilterSettings')
-
-    if existing_meta.get('filterVersionSelector', {}).get('alias') != DEFAULT_FILTER_VERSION_ALIAS:
-        metadata['filterVersionSelector'] = defaults['templateMetadata']['filterVersionSelector']
-        update_mask.append('templateMetadata.filterVersionSelector')
 
     wanted_modalities = defaults['templateMetadata']['modalities']
     if list(existing_meta.get('modalities', [])) != wanted_modalities:
@@ -388,7 +378,6 @@ def ensure_demo_templates_exist():
     for endpoint_info in model_armor_endpoints:
         location = endpoint_info['location']
         endpoint = endpoint_info['endpoint']
-        supports_images = endpoint_info.get('supports_images', False)
         try:
             token = get_cached_auth_token()
             headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -400,31 +389,32 @@ def ensure_demo_templates_exist():
                 continue
             existing = {t.get('name', '').split('/')[-1]: t for t in list_resp.json().get('templates', [])}
 
-            payload = build_default_template_payload(supports_images)
-            for template_id in ["modelarmor-demo-prompt", "modelarmor-demo-response"]:
-                if template_id in existing:
-                    outcome = reconcile_demo_template(
-                        base_url, template_id, existing[template_id], supports_images, headers
-                    )
-                    if outcome is None:
-                        print(f"  - {template_id} in {location} already matches defaults")
-                    else:
-                        resp, update_mask = outcome
-                        if resp.status_code == 200:
-                            print(f"  - Updated {template_id} in {location}: {', '.join(update_mask)}")
+            for spec in DEMO_TEMPLATES:
+                payload = build_template_payload(spec)
+                for template_id in (f"{spec['id']}-prompt", f"{spec['id']}-response"):
+                    if template_id in existing:
+                        outcome = reconcile_demo_template(
+                            base_url, template_id, existing[template_id], spec, headers
+                        )
+                        if outcome is None:
+                            print(f"  - {template_id} in {location} already matches its spec")
                         else:
-                            print(f"  - ERROR: Failed to update {template_id} in {location}: {resp.text}")
-                    continue
+                            resp, update_mask = outcome
+                            if resp.status_code == 200:
+                                print(f"  - Updated {template_id} in {location}: {', '.join(update_mask)}")
+                            else:
+                                print(f"  - ERROR: Failed to update {template_id} in {location}: {resp.text}")
+                        continue
 
-                print(f"  - Creating {template_id} in {location}...")
-                resp = http_client.session.post(
-                    f"{base_url}?template_id={template_id}", headers=headers, json=payload, timeout=(5, 30)
-                )
-                if resp.status_code == 200:
-                    print(f"  - Successfully created {template_id} in {location} "
-                          f"(confidence={DEFAULT_CONFIDENCE_LEVEL}, modalities={payload['templateMetadata']['modalities']})")
-                else:
-                    print(f"  - ERROR: Failed to create {template_id} in {location}: {resp.text}")
+                    print(f"  - Creating {template_id} in {location}...")
+                    resp = http_client.session.post(
+                        f"{base_url}?template_id={template_id}", headers=headers, json=payload, timeout=(5, 30)
+                    )
+                    if resp.status_code == 200:
+                        print(f"  - Created {template_id} in {location} "
+                              f"(confidence={DEFAULT_CONFIDENCE_LEVEL}, modalities={payload['templateMetadata']['modalities']})")
+                    else:
+                        print(f"  - ERROR: Failed to create {template_id} in {location}: {resp.text}")
         except Exception as e:
             print(f"  - ERROR: Failed to ensure templates in {location}: {e}")
 
@@ -656,10 +646,12 @@ def fetch_model_armor_templates(location, endpoint):
             # Let's just use the string or parse it.
             update_time_str = template.get('updateTime', '')
             
+            modalities = (template.get('templateMetadata') or {}).get('modalities') or []
             template_info = {
-                'name': template_name, 
-                'display_name': template_name, 
-                'location': location, 
+                'name': template_name,
+                'display_name': DEMO_TEMPLATE_DISPLAY_NAMES.get(template_name, template_name),
+                'supports_images': 'MODALITY_IMAGE' in modalities,
+                'location': location,
                 'last_updated': update_time_str, # Just use the string from API
                 'config': config_dict
             }
@@ -685,12 +677,6 @@ FILTER_LABELS = {
 }
 
 UNSPECIFIED_CONFIDENCE = 'DETECTION_CONFIDENCE_LEVEL_UNSPECIFIED'
-
-def sanitize_result_to_dict(response):
-    """Normalize an SDK sanitize response into the JSON shape the REST API returns."""
-    return type(response).to_dict(
-        response, preserving_proto_field_name=False, use_integers_for_enums=False
-    )
 
 def get_filter_verdict(filter_data, key):
     """The dict holding matchState/executionState for one filter result."""
@@ -809,14 +795,13 @@ def check_sdp_transformation_for_file(response_data):
         print(f"Error extracting SDP transformation from file JSON: {e}")
     return None
 
-def analyze_response_with_template(response_text, template_name, location, modelarmor_client, use_default_response):
+def analyze_response_with_template(response_text, template_name, location, endpoint, use_default_response):
     template_display_name = template_name
     try:
-        model_response_data = modelarmor_v1.DataItem()
-        model_response_data.text = response_text
-        response_sanitize_request = modelarmor_v1.SanitizeModelResponseRequest(name=get_template_path(template_name, location), model_response_data=model_response_data)
-        response_check = modelarmor_client.sanitize_model_response(request=response_sanitize_request)
-        result = sanitize_result_to_dict(response_check)
+        result = sanitize_via_rest(
+            'sanitizeModelResponse', 'modelResponseData', {"text": response_text},
+            template_name, location, endpoint,
+        )
         output_str = json.dumps(result, indent=2)
         filter_results = process_rest_api_results(result)
 
@@ -864,17 +849,31 @@ def normalize_rai_filter_type(value):
     except (TypeError, ValueError):
         return None
 
-def get_template_path(template_name, location):
-    return f"projects/{project}/locations/{location}/templates/{validate_template_name(template_name)}"
+def sanitize_via_rest(method, data_field, data_item, template_name, location, endpoint):
+    """Call sanitizeUserPrompt or sanitizeModelResponse over REST.
 
-def create_text_data_item(text):
-    data_item = modelarmor_v1.DataItem()
-    data_item.text = text
-    return data_item
+    Every sanitize call goes through here rather than the SDK: the pinned SDK
+    predates fields such as sanitizationMetadata.filterVersionConfig and drops
+    them while parsing, whereas the REST response carries the full result.
+    """
+    url = (f"https://{endpoint}/v1/projects/{project}/locations/{location}"
+           f"/templates/{validate_template_name(template_name)}:{method}")
+    payload = {data_field: data_item}
+    headers = {
+        "Authorization": f"Bearer {get_cached_auth_token()}",
+        "Content-Type": "application/json",
+    }
+    response = http_client.session.post(url, headers=headers, json=payload, timeout=(5, 30))
+    if response.status_code == 401:
+        # The cached token was rejected. Force a refresh and try once more.
+        print("WARNING: Model Armor returned 401; refreshing token and retrying.")
+        headers["Authorization"] = f"Bearer {get_cached_auth_token(force_refresh=True)}"
+        response = http_client.session.post(url, headers=headers, json=payload, timeout=(5, 30))
+    response.raise_for_status()
+    return response.json()
 
 def sanitize_file_prompt_with_rest_api_optimized(file_data_base64, mime_type, template_name, location, endpoint):
-    """Optimized version with caching and connection reuse"""
-    # Check cache first
+    """Screen an uploaded file or image, with caching."""
     cache_key = get_cache_key({'base64_data': file_data_base64, 'mime_type': mime_type}, template_name, location)
     cached_result = get_cached_result(cache_key)
     if cached_result:
@@ -892,38 +891,13 @@ def sanitize_file_prompt_with_rest_api_optimized(file_data_base64, mime_type, te
             )
 
     try:
-        access_token = get_cached_auth_token()
-        
-        url = (f"https://{endpoint}/v1/projects/{project}/locations/{location}"
-               f"/templates/{validate_template_name(template_name)}:sanitizeUserPrompt")
-        
-        payload = {
-            "userPromptData": {
-                "byteItem": {
-                    "byteDataType": byte_data_type,
-                    "byteData": file_data_base64
-                }
-            }
-        }
-        
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Content-Type": "application/json"
-        }
-        
-        response = http_client.session.post(url, headers=headers, json=payload, timeout=(5, 30))
-        if response.status_code == 401:
-            # The cached token was rejected. Force a refresh and try once more.
-            print("WARNING: Model Armor returned 401; refreshing token and retrying.")
-            headers["Authorization"] = f"Bearer {get_cached_auth_token(force_refresh=True)}"
-            response = http_client.session.post(url, headers=headers, json=payload, timeout=(5, 30))
-        response.raise_for_status()
-        result = response.json()
-        
-        # Cache the result
+        result = sanitize_via_rest(
+            'sanitizeUserPrompt', 'userPromptData',
+            {"byteItem": {"byteDataType": byte_data_type, "byteData": file_data_base64}},
+            template_name, location, endpoint,
+        )
         cache_result(cache_key, result)
         return result
-        
     except Exception as e:
         print(f"Error in optimized file sanitization: {e}")
         raise e
@@ -937,16 +911,10 @@ def sanitize_text_prompt_optimized(text, template_name, location, endpoint_info)
         return cached_result
     
     try:
-        modelarmor_client = get_model_armor_client(location, endpoint_info['endpoint'])
-        prompt_data_item = create_text_data_item(text)
-        prompt_sanitize_request = modelarmor_v1.SanitizeUserPromptRequest(
-            name=get_template_path(template_name, location),
-            user_prompt_data=prompt_data_item
+        result = sanitize_via_rest(
+            'sanitizeUserPrompt', 'userPromptData', {"text": text},
+            template_name, location, endpoint_info['endpoint'],
         )
-        prompt_check = modelarmor_client.sanitize_user_prompt(request=prompt_sanitize_request)
-        result = sanitize_result_to_dict(prompt_check)
-        
-        # Cache the result
         cache_result(cache_key, result)
         return result
         
@@ -1081,8 +1049,9 @@ async def analyze_response_async(response_text, response_template, location, end
     loop = asyncio.get_event_loop()
     
     def run_analysis():
-        modelarmor_client = get_model_armor_client(location, endpoint_info['endpoint'])
-        return analyze_response_with_template(response_text, response_template, location, modelarmor_client, use_default_response)
+        return analyze_response_with_template(
+            response_text, response_template, location, endpoint_info['endpoint'], use_default_response
+        )
     
     return await loop.run_in_executor(None, run_analysis)
 
@@ -1306,6 +1275,7 @@ def analyze_prompt():
         prompt_analysis = None
         filter_results = []
         filter_details = []
+        filter_version = None
         output_str = ""
         scan_error = None
 
@@ -1340,6 +1310,7 @@ def analyze_prompt():
                 output_str = analysis['output_str']
                 filter_results = analysis['filter_results']
                 filter_details = analysis['filter_details']
+                filter_version = analysis['filter_version']
                 scan_error = analysis['scan_error']
             else:
                 result = sanitize_file_prompt_with_rest_api_optimized(
@@ -1348,6 +1319,7 @@ def analyze_prompt():
                 output_str = json.dumps(result, indent=2)
                 filter_results = process_rest_api_results(result)
                 filter_details = summarize_filter_results(result)
+                filter_version = get_filter_version(result)
                 scan_error = describe_scan_problems(result, 'file')
 
         # Handle text-only scenario
@@ -1368,12 +1340,14 @@ def analyze_prompt():
             output_str = json.dumps(result, indent=2)
             filter_results = process_rest_api_results(result)
             filter_details = summarize_filter_results(result)
+            filter_version = get_filter_version(result)
 
         # Common response structure
         prompt_analysis = {
             'template': prompt_template,
             'status': 'error' if scan_error else ('fail' if filter_results else 'pass'),
             'filter_details': filter_details,
+            'filter_version': filter_version,
             'raw_output': f"⚠️ {scan_error}\n\n{output_str}" if scan_error else output_str
         }
         
