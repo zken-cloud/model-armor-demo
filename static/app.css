@@ -1,0 +1,662 @@
+:root {
+    --google-blue: #4285f4;
+    --google-red: #ea4335;
+    --google-yellow: #fbbc05;
+    --google-green: #34a853;
+    --google-gray: #5f6368;
+    --google-light-gray: #f8f9fa;
+}
+
+body {
+    font-family: 'Google Sans', Arial, sans-serif;
+    color: var(--google-gray);
+    overflow: hidden;
+}
+
+#app-container {
+    display: flex;
+    height: 100vh;
+    position: relative;
+    width: 100%;
+}
+
+/* Left Sidebar - 25% */
+#sidebar {
+    width: 25%;
+    min-width: 250px;
+    max-width: 40%;
+    padding: 1.5rem;
+    background-color: var(--google-light-gray);
+    border-right: 1px solid #dee2e6;
+    overflow-y: auto;
+    position: relative;
+    flex-shrink: 0;
+    transition: width 0.3s ease, padding 0.3s ease;
+}
+
+#sidebar.collapsed {
+    width: 0 !important;
+    min-width: 0;
+    padding: 1.5rem 0;
+    overflow: hidden;
+    border-right: none;
+}
+
+/* Main Content Area */
+#main-content {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 1rem 2rem;
+    overflow: hidden;
+    width: 75%;
+    /* Initial width when sidebar is present */
+    transition: width 0.3s ease;
+}
+
+.main-container {
+    display: flex;
+    gap: 0;
+    height: 100%;
+    overflow-y: auto;
+    position: relative;
+    width: 100%;
+}
+
+/* Chat Section - 50% of total (approx 66% of main-content) */
+.chat-section {
+    flex: 2;
+    /* Takes up 2/3 of main-content, which is 50% of total */
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-width: 300px;
+    transition: flex 0.3s ease;
+}
+
+/* Right Sidebar (Model Armor) - 25% of total (approx 33% of main-content) */
+.model-armor-section {
+    flex: 1;
+    /* Takes up 1/3 of main-content, which is 25% of total */
+    min-width: 300px;
+    background-color: white;
+    border-radius: 8px;
+    padding: 1rem;
+    box-shadow: 0 1px 2px 0 rgba(60, 64, 67, 0.3), 0 1px 3px 1px rgba(60, 64, 67, 0.15);
+    overflow-y: auto;
+    flex-shrink: 0;
+    transition: flex 0.3s ease, width 0.3s ease, padding 0.3s ease, min-width 0.3s ease;
+    margin-left: 1rem;
+}
+
+.model-armor-section.collapsed {
+    flex: 0 !important;
+    width: 0 !important;
+    min-width: 0 !important;
+    padding: 0;
+    margin-left: 0;
+    overflow: hidden;
+    border: none;
+}
+
+h1,
+h2,
+h3,
+h4 {
+    color: var(--google-blue);
+    font-weight: 500;
+}
+
+.loading-spinner {
+    border: 4px solid #f3f3f3;
+    border-top: 4px solid var(--google-blue);
+    border-radius: 50%;
+    width: 30px;
+    height: 30px;
+    animation: spin 1s linear infinite;
+    margin: 1rem auto;
+}
+
+@keyframes spin {
+    0% {
+        transform: rotate(0deg);
+    }
+
+    100% {
+        transform: rotate(360deg);
+    }
+}
+
+.chat-header {
+    flex: 0 0 auto;
+    margin-bottom: 1rem;
+}
+
+.chat-messages-container {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+}
+
+.chat-container {
+    border: 1px solid #e8eaed;
+    border-radius: 8px;
+    padding: 1rem;
+    background-color: white;
+    box-shadow: 0 1px 2px 0 rgba(60, 64, 67, 0.3), 0 1px 3px 1px rgba(60, 64, 67, 0.15);
+    height: calc(100% - 1rem);
+    overflow-y: auto;
+    margin-bottom: 1rem;
+}
+
+.input-container {
+    height: 80px;
+    background: white;
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+.input-group {
+    box-sizing: border-box;
+    width: 100%;
+    height: 100%;
+    box-shadow: 0 1px 2px 0 rgba(60, 64, 67, 0.3), 0 1px 3px 1px rgba(60, 64, 67, 0.15);
+    border-radius: 8px;
+    overflow: hidden;
+    display: flex;
+    background: white;
+}
+
+.input-group .form-control {
+    box-sizing: border-box;
+    flex: 1 0 auto;
+    height: 100%;
+    border: none;
+    padding: 0.5rem 1rem;
+    font-size: 16px;
+    resize: none;
+}
+
+.input-group .btn {
+    height: 100%;
+    padding: 0 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    white-space: nowrap;
+}
+
+#fileButton {
+    border-left: 1px solid #dee2e6;
+    border-right: 1px solid #dee2e6;
+}
+
+.message {
+    margin-bottom: 1rem;
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    max-width: 80%;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+}
+
+.user-message {
+    background-color: var(--google-blue);
+    color: white;
+    margin-left: auto;
+}
+
+.bot-message {
+    background-color: var(--google-light-gray);
+    color: var(--google-gray);
+    margin-right: auto;
+    border: 1px solid #e8eaed;
+}
+
+.bot-message h1, .bot-message h2, .bot-message h3, .bot-message h4, .bot-message h5, .bot-message h6 {
+    color: inherit;
+    font-size: 1.1rem;
+    font-weight: bold;
+    margin-top: 0.5rem;
+    margin-bottom: 0.25rem;
+}
+
+.title-section {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+}
+
+.google-cloud-logo {
+    height: 40px;
+    width: auto;
+}
+
+h1 {
+    margin: 0;
+    font-size: 1.75rem;
+}
+
+.template-info {
+    font-size: 0.75rem;
+    color: var(--google-gray);
+    margin-top: 0.25rem;
+    display: block;
+}
+
+.model-armor-result h3 {
+    font-size: 1rem;
+    margin-bottom: 0.5rem;
+    color: var(--google-gray);
+}
+
+.analysis-card {
+    display: flex;
+    align-items: center;
+    padding: 0.75rem;
+    border-radius: 8px;
+    margin-bottom: 0.5rem;
+    border: 1px solid #e8eaed;
+}
+
+.analysis-icon {
+    font-size: 1.5rem;
+    margin-right: 1rem;
+}
+
+.analysis-card.pass {
+    background-color: #e6f4ea;
+    color: #1e8e3e;
+}
+
+.analysis-card.fail {
+    background-color: #fce8e6;
+    color: #a50e0e;
+}
+.analysis-card.skipped {
+    background-color: #fef7e0;
+    color: #b06000;
+}
+.dlp-hint {
+    display: block;
+    margin-top: 0.25rem;
+    font-size: 0.7rem;
+    line-height: 1.3;
+    word-break: break-word;
+}
+.filter-version {
+    margin-top: 0.5rem;
+    font-size: 0.75rem;
+    color: #5f6368;
+}
+
+.analysis-text {
+    font-weight: 500;
+}
+
+.raw-output-toggle {
+    font-size: 0.875rem;
+    color: var(--google-blue);
+    text-decoration: none;
+    cursor: pointer;
+    display: block;
+    margin-top: 1rem;
+}
+
+.raw-output {
+    font-family: monospace;
+    white-space: pre-wrap;
+    background-color: #3c4043;
+    color: #e8eaed;
+    padding: 1rem;
+    border-radius: 4px;
+    margin-top: 0.5rem;
+    max-height: 300px;
+    overflow-y: auto;
+    word-break: break-all;
+}
+
+.toggle-btn {
+    font-size: 1.5rem;
+    background: none;
+    border: none;
+    color: var(--google-gray);
+    cursor: pointer;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    transition: background-color 0.2s;
+}
+
+.toggle-btn:hover {
+    background-color: rgba(0, 0, 0, 0.05);
+}
+
+#filePreview {
+    padding: 0.5rem;
+    background-color: #f8f9fa;
+    border-radius: 4px;
+    border: 1px solid #dee2e6;
+}
+
+.file-indicator {
+    color: var(--google-blue);
+    font-weight: 500;
+}
+
+.model-warning {
+    background-color: #fff3cd;
+    border: 1px solid #ffeaa7;
+    color: #856404;
+    padding: 0.5rem;
+    border-radius: 4px;
+    font-size: 0.875rem;
+    margin-top: 0.5rem;
+}
+
+.performance-indicator {
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    background: rgba(0, 0, 0, 0.8);
+    color: white;
+    padding: 0.5rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    z-index: 1000;
+}
+
+/* Mobile responsive styles */
+@media (max-width: 768px) {
+
+    body {
+        overflow: auto;
+    }
+
+    #app-container {
+        flex-direction: column;
+        height: auto;
+        min-height: 100vh;
+    }
+
+    #sidebar {
+        width: 100%;
+        max-width: 100%;
+        border-right: none;
+        border-bottom: 1px solid #dee2e6;
+        position: fixed;
+        top: 0;
+        left: 0;
+        z-index: 999;
+        max-height: 70vh;
+        transform: translateY(0);
+        transition: transform 0.3s ease;
+    }
+
+    #sidebar.collapsed {
+        height: 0 !important;
+        padding: 0 !important;
+        border-bottom: none;
+        max-height: 0;
+        overflow: hidden;
+    }
+
+    #main-content {
+        width: 100% !important;
+        padding: 0.5rem;
+    }
+
+    .main-container {
+        flex-direction: column;
+    }
+
+    .chat-section {
+        width: 100%;
+        min-width: 100%;
+        margin-bottom: 1rem;
+    }
+
+    .model-armor-section {
+        width: 100%;
+        min-width: 100%;
+    }
+
+    .model-armor-section.collapsed {
+        height: 0 !important;
+        padding: 0 !important;
+        overflow: hidden;
+        min-height: 0;
+        border: none;
+    }
+
+    h1 {
+        font-size: 1rem;
+        flex: 1 1 auto;
+        word-break: break-word;
+        line-height: 1.3;
+    }
+
+    #help-button {
+        font-size: 0.75rem;
+        padding: 0.25rem 0.5rem;
+        margin-left: 0.5rem;
+    }
+
+    #help-button svg {
+        width: 16px;
+        height: 16px;
+    }
+
+    .google-cloud-logo {
+        height: 25px;
+    }
+
+    .toggle-btn {
+        padding: 0.25rem 0.5rem;
+        font-size: 1.25rem;
+    }
+
+    /* Form controls */
+    .form-label {
+        font-size: 0.875rem;
+        word-break: break-word;
+    }
+
+    .form-select,
+    .form-control {
+        font-size: 0.875rem;
+    }
+
+    /* Chat improvements */
+    .chat-container {
+        height: 300px;
+        margin-bottom: 0.5rem;
+    }
+
+    .input-container {
+        height: auto;
+        padding: 0.5rem 0;
+    }
+
+    .input-group {
+        height: 50px;
+        flex-wrap: nowrap;
+    }
+
+    .input-group .btn {
+        padding: 0 0.75rem;
+        font-size: 0.875rem;
+        white-space: nowrap;
+    }
+
+    .message {
+        max-width: 90%;
+        font-size: 0.875rem;
+        word-wrap: break-word;
+        overflow-wrap: break-word;
+    }
+
+    .chat-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.5rem;
+    }
+
+    .chat-controls {
+        display: flex;
+        gap: 0.5rem;
+        width: 100%;
+        flex-wrap: wrap;
+    }
+
+    .chat-controls .btn {
+        font-size: 0.75rem;
+        padding: 0.25rem 0.5rem;
+        flex: 1 1 auto;
+    }
+
+    .performance-indicator {
+        top: 70px;
+        right: 5px;
+        font-size: 0.625rem;
+        padding: 0.25rem;
+    }
+
+    #filePreview {
+        font-size: 0.75rem;
+        padding: 0.25rem;
+        word-break: break-word;
+    }
+
+    .analysis-card {
+        padding: 0.5rem;
+        font-size: 0.875rem;
+        word-wrap: break-word;
+    }
+
+    .analysis-icon {
+        font-size: 1.25rem;
+        margin-right: 0.5rem;
+    }
+
+    /* Template popup - hide on mobile */
+    .template-popup {
+        display: none !important;
+    }
+}
+
+@media (max-width: 480px) {
+    h1 {
+        font-size: 0.875rem;
+    }
+
+    #help-button {
+        font-size: 0.65rem;
+        padding: 0.2rem 0.4rem;
+    }
+
+    .google-cloud-logo {
+        height: 20px;
+    }
+
+    .input-group .btn {
+        padding: 0 0.5rem;
+        font-size: 0.75rem;
+    }
+
+    #sendButton {
+        font-size: 0.75rem;
+    }
+
+    .message {
+        padding: 0.5rem 0.75rem;
+        font-size: 0.8rem;
+    }
+
+    .chat-controls .btn {
+        font-size: 0.7rem;
+        padding: 0.2rem 0.4rem;
+    }
+}
+
+/* Template Details Popup */
+.template-popup {
+    position: absolute;
+    background: white;
+    border: 1px solid #ccc;
+    border-radius: 8px;
+    padding: 1rem;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    z-index: 10000;
+    max-width: 400px;
+    max-height: 500px;
+    overflow-y: auto;
+    font-size: 0.85rem;
+    pointer-events: none;
+    /* Let mouse events pass through so it doesn't flicker */
+    line-height: 1.5;
+}
+
+.template-popup h4 {
+    margin-top: 0;
+    margin-bottom: 0.5rem;
+    color: var(--google-blue);
+    font-size: 1rem;
+    border-bottom: 2px solid var(--google-blue);
+    padding-bottom: 0.25rem;
+}
+
+.template-popup pre {
+    background: #f8f9fa;
+    padding: 0.5rem;
+    border-radius: 4px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    margin: 0;
+    font-family: monospace;
+    font-size: 0.75rem;
+}
+
+.template-popup .template-meta {
+    font-size: 0.75rem;
+    color: #666;
+    margin-bottom: 1rem;
+}
+
+.template-popup .config-section {
+    margin-bottom: 1rem;
+}
+
+.template-popup .config-section strong {
+    display: block;
+    margin-bottom: 0.5rem;
+    color: #333;
+}
+
+.template-popup ul {
+    margin: 0;
+    padding-left: 1.5rem;
+}
+
+.template-popup li {
+    margin-bottom: 0.25rem;
+}
+
+.template-popup .no-config {
+    color: #999;
+    font-style: italic;
+}
+
+/* --- Replacements for former inline style attributes (strict CSP) --- */
+#sidebar-close { font-size: 1.2rem; line-height: 1; }
+.editor-note { font-size: 0.75rem; }
+.col-w-22 { width: 22%; }
+.col-w-30 { width: 30%; }
+.col-w-40 { width: 40%; }
+
+/* Initial hidden state; JS shows elements by setting an inline display, which
+   overrides this. Keep it last so it wins ties with other class rules. */
+[hidden] { display: none; }
+

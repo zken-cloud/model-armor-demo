@@ -28,13 +28,14 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max upload size
 # --- Jinja2 Configuration for XSS Protection --
 app.jinja_env.autoescape = True
 
-# Scripts and styles are inline in the template, so 'unsafe-inline' is needed
-# for those two directives; every other source is pinned to self or the two
-# CDNs the page loads from (each of which also carries an SRI hash).
+# Strict policy: all first-party script and style ship as static files and
+# the template carries no inline handlers or style attributes, so nothing needs
+# 'unsafe-inline'. External sources are pinned to the two CDNs the page loads
+# from, each of which also carries an SRI hash.
 CONTENT_SECURITY_POLICY = "; ".join([
     "default-src 'self'",
-    "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com",
-    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
+    "script-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com",
+    "style-src 'self' https://cdn.jsdelivr.net",
     "img-src 'self' data:",
     "font-src 'self' data:",
     "connect-src 'self'",
