@@ -65,6 +65,15 @@ It is recommended to run the application with a dedicated service account with l
       --role="roles/aiplatform.user"
     ```
 
+4.  **Grant DLP Reader role** (required to list the Sensitive Data Protection inspect and de-identify templates offered in the template editor):
+    ```bash
+    gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+      --member="serviceAccount:model-armor-demo-sa@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
+      --role="roles/dlp.reader"
+    ```
+
+    These three roles are the complete set the application needs. `roles/modelarmor.admin` already includes the sanitize permissions, so `roles/modelarmor.user` is not required, and no project-wide `roles/viewer` or `roles/aiplatform.admin` grant is needed.
+
 ### Step 3: Local Setup & Testing (Optional)
 
 If you want to test the application locally before deploying:
