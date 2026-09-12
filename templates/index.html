@@ -44,7 +44,7 @@
                         %}<option value="{{ endpoint.location }}" data-supports-images="{{ 'true' if endpoint.supports_images else 'false' }}">{{ endpoint.display_name }}{{ ' 🖼' if endpoint.supports_images else '' }}</option>{% endfor %}
                     </select></div>
                 <div class="mb-3">
-                    <label for="promptTemplate" class="form-label">Prompt Template:</label>
+                    <label for="promptTemplate" class="form-label">Prompt Template: <span class="info-icon" id="promptTemplateInfo" role="button" tabindex="0" aria-label="infoTypes this template detects" hidden>?</span></label>
                     <div class="d-flex gap-2">
                         <select class="form-select" id="promptTemplate"></select>
                         <button class="btn btn-outline-secondary btn-sm" id="editPromptTemplateBtn" type="button">Edit</button>
@@ -52,7 +52,7 @@
                     <span id="promptTemplateInfo" class="template-info"></span>
                 </div>
                 <div class="mb-4">
-                    <label for="responseTemplate" class="form-label">Response Template:</label>
+                    <label for="responseTemplate" class="form-label">Response Template: <span class="info-icon" id="responseTemplateInfo" role="button" tabindex="0" aria-label="infoTypes this template detects" hidden>?</span></label>
                     <div class="d-flex gap-2">
                         <select class="form-select" id="responseTemplate"></select>
                         <button class="btn btn-outline-secondary btn-sm" id="editResponseTemplateBtn" type="button">Edit</button>
@@ -366,14 +366,14 @@
                                         <div id="sdpAdvancedFields" hidden>
                                             <div id="sdpUnavailableNote" class="alert alert-warning py-2 px-2 mb-2 editor-note" hidden></div>
                                             <div class="mb-2">
-                                                <label class="form-label sm">Inspect Template</label>
+                                                <label class="form-label sm">Inspect Template <span class="info-icon" id="customInspectTemplateInfo" role="button" tabindex="0" aria-label="infoTypes this inspect template detects" hidden>?</span></label>
                                                 <select class="form-select form-select-sm" id="customInspectTemplate">
                                                     <option value="">Loading...</option>
                                                 </select>
                                                 <small class="text-muted dlp-hint" id="customInspectTemplateHint"></small>
                                             </div>
                                             <div class="mb-2">
-                                                <label class="form-label sm">Deidentify Template</label>
+                                                <label class="form-label sm">Deidentify Template <span class="info-icon" id="customDeidentifyTemplateInfo" role="button" tabindex="0" aria-label="infoTypes this de-identify template transforms" hidden>?</span></label>
                                                 <select class="form-select form-select-sm" id="customDeidentifyTemplate">
                                                     <option value="">Loading...</option>
                                                 </select>

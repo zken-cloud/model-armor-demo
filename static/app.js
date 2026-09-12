@@ -67,7 +67,10 @@ async function preloadTemplates() {
     await Promise.all(promises);
 }
 
+let currentTemplateData = null;   // last /templates/<location> payload
+
 function populateTemplateSelects(data, selectedPromptName = null, selectedResponseName = null) {
+    currentTemplateData = data;
     const promptSelect = document.getElementById('promptTemplate');
     const responseSelect = document.getElementById('responseTemplate');
  
@@ -103,6 +106,7 @@ function populateTemplateSelects(data, selectedPromptName = null, selectedRespon
     // Attach hover listeners
     attachHoverListeners(promptSelect, promptTemplatesMap);
     attachHoverListeners(responseSelect, responseTemplatesMap);
+    updateTemplateInfoIcons();
 }
 
 function attachHoverListeners(selectElement, templateMap) {
@@ -290,6 +294,32 @@ window.addEventListener('resize', () => {
 // --- SDP (DLP) template dropdowns ---
 const dlpTemplateCache = new Map();
 
+// Show a (?) icon whose hover/focus tooltip carries `text`; hide it when empty.
+function setInfoIcon(iconId, text) {
+    const icon = document.getElementById(iconId);
+    if (!icon) return;
+    if (!text) {
+        icon.hidden = true;
+        return;
+    }
+    icon.hidden = false;
+    icon.setAttribute('title', text);            // plain fallback
+    icon.setAttribute('data-bs-title', text);
+    if (window.bootstrap && bootstrap.Tooltip) {
+        const tip = bootstrap.Tooltip.getOrCreateInstance(icon, {
+            trigger: 'hover focus', placement: 'right', container: 'body',
+        });
+        tip.setContent({ '.tooltip-inner': text });
+    }
+}
+
+function fullInfoTypeList(infoTypes) {
+    if (!infoTypes || !infoTypes.length) {
+        return 'No infoTypes configured - Sensitive Data Protection defaults apply';
+    }
+    return infoTypes.join(', ');
+}
+
 function describeInfoTypes(infoTypes, limit = 12) {
     if (!infoTypes || !infoTypes.length) {
         return 'No infoTypes configured - Sensitive Data Protection defaults apply';
@@ -307,6 +337,9 @@ function updateDlpHover(selectId) {
     select.title = detail || 'Select a template to see the infoTypes it matches';
     const hint = document.getElementById(selectId + 'Hint');
     if (hint) hint.textContent = detail ? `Triggers on: ${detail}` : '';
+    // The (?) icon carries the complete list, not the truncated sample.
+    const full = option && option.value ? (option.dataset.infoTypesFull || detail) : '';
+    setInfoIcon(selectId + 'Info', full ? `Triggers on: ${full}` : '');
 }
 
 function fillDlpSelect(selectId, templates, currentValue) {
@@ -324,6 +357,7 @@ function fillDlpSelect(selectId, templates, currentValue) {
         option.textContent = t.display_name === t.id ? t.id : `${t.display_name} (${t.id})`;
         const detail = describeInfoTypes(t.info_types);
         option.dataset.infoTypes = detail;
+        option.dataset.infoTypesFull = fullInfoTypeList(t.info_types);
         option.title = detail;   // hover on the option itself
         select.appendChild(option);
     });
@@ -341,7 +375,7 @@ function fillDlpSelect(selectId, templates, currentValue) {
     updateDlpHover(selectId);
 }
 
-async function loadDlpTemplates(location, inspectValue, deidentifyValue) {
+async function getDlpTemplates(location) {
     let data = dlpTemplateCache.get(location);
     if (!data) {
         try {
@@ -352,6 +386,44 @@ async function loadDlpTemplates(location, inspectValue, deidentifyValue) {
             data = { inspect_templates: [], deidentify_templates: [] };
         }
     }
+    return data;
+}
+
+// Sidebar (?) icons: for a selected template that uses Advanced SDP, list the
+// infoTypes its inspect / de-identify templates cover.
+async function updateTemplateInfoIcons() {
+    const location = document.getElementById('locationSelect').value;
+    const pairs = [
+        ['promptTemplate', 'promptTemplateInfo', 'prompt_templates'],
+        ['responseTemplate', 'responseTemplateInfo', 'response_templates'],
+    ];
+    let dlp = null;
+    for (const [selectId, iconId, listKey] of pairs) {
+        const name = document.getElementById(selectId).value;
+        const tpl = currentTemplateData && (currentTemplateData[listKey] || []).find(t => t.name === name);
+        const sdp = tpl && tpl.config && tpl.config.sdp_settings;
+        if (!sdp || !String(sdp.mode || '').startsWith('Advanced')) {
+            setInfoIcon(iconId, '');
+            continue;
+        }
+        dlp = dlp || await getDlpTemplates(location);
+        const inspect = (dlp.inspect_templates || []).find(t => t.id === sdp.inspect_template);
+        const deid = (dlp.deidentify_templates || []).find(t => t.id === sdp.deidentify_template);
+        const lines = [];
+        if (sdp.inspect_template) {
+            lines.push(`Inspect (${sdp.inspect_template}): ` +
+                (inspect ? fullInfoTypeList(inspect.info_types) : 'not found in this region'));
+        }
+        if (sdp.deidentify_template) {
+            lines.push(`De-identify (${sdp.deidentify_template}): ` +
+                (deid ? fullInfoTypeList(deid.info_types) : 'not found in this region'));
+        }
+        setInfoIcon(iconId, lines.join('\n') || 'Advanced SDP with no templates set');
+    }
+}
+
+async function loadDlpTemplates(location, inspectValue, deidentifyValue) {
+    const data = await getDlpTemplates(location);
     fillDlpSelect('customInspectTemplate', data.inspect_templates || [], inspectValue);
     fillDlpSelect('customDeidentifyTemplate', data.deidentify_templates || [], deidentifyValue);
     updateSdpImageWarning();
@@ -935,6 +1007,8 @@ function bindStaticHandlers() {
         updateDlpHover('customDeidentifyTemplate');
         updateSdpImageWarning();
     });
+    document.getElementById('promptTemplate').addEventListener('change', updateTemplateInfoIcons);
+    document.getElementById('responseTemplate').addEventListener('change', updateTemplateInfoIcons);
     document.getElementById('promptRawOutputToggle').addEventListener('click', () => toggleRawOutput('prompt'));
     document.getElementById('responseRawOutputToggle').addEventListener('click', () => toggleRawOutput('response'));
 }

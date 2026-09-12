@@ -656,6 +656,27 @@ h1 {
 .col-w-30 { width: 30%; }
 .col-w-40 { width: 40%; }
 
+/* Question-mark icon whose hover lists a template's infoTypes */
+.info-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.1rem;
+    height: 1.1rem;
+    margin-left: 0.25rem;
+    border-radius: 50%;
+    border: 1px solid var(--google-blue);
+    color: var(--google-blue);
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1;
+    cursor: help;
+    vertical-align: middle;
+    user-select: none;
+}
+.info-icon:hover, .info-icon:focus { background-color: var(--google-blue); color: #fff; outline: none; }
+.tooltip-inner { max-width: 420px; text-align: left; }
+
 /* Initial hidden state; JS shows elements by setting an inline display, which
    overrides this. Keep it last so it wins ties with other class rules. */
 [hidden] { display: none; }
