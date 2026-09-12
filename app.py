@@ -1728,6 +1728,10 @@ def chat():
             }
         })
         
+    except ValueError as e:
+        # Input the app rejected on purpose (unsupported type, oversized image).
+        return jsonify({'error': str(e), 'response': str(e), 'source': 'System',
+                        'model_armor': {'prompt_analysis': None, 'response_analysis': None}}), 400
     except Exception as e:
         error_message = f"An unexpected error occurred during chat processing: {str(e)}"
         print(f"ERROR in /chat: {traceback.format_exc()}")

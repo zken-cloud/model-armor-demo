@@ -682,7 +682,9 @@ h1 {
 .redacted-image { max-width: 100%; border: 2px solid #d93025; border-radius: 4px; display: block; }
 .redacted-figure figcaption { font-size: 0.75rem; color: #5f6368; margin-top: 0.25rem; }
 
-/* Initial hidden state; JS shows elements by setting an inline display, which
-   overrides this. Keep it last so it wins ties with other class rules. */
-[hidden] { display: none; }
+/* Initial hidden state for elements the script later shows by setting an
+   inline display. Deliberately NOT the hidden attribute: Bootstrap's reboot
+   declares [hidden]{display:none!important}, which no inline style can
+   override. A plain class, last in the cascade, can. */
+.is-hidden { display: none; }
 

@@ -13,7 +13,7 @@
 </head>
 
 <body class="bg-light">
-    <div id="performanceIndicator" class="performance-indicator" hidden>
+    <div id="performanceIndicator" class="is-hidden performance-indicator">
         Processing...
     </div>
 
@@ -33,7 +33,7 @@
                             model.display_name }} ({{model.provider}})</option>
                         {% endfor %}
                     </select>
-                    <div id="fileWarning" class="model-warning" hidden>
+                    <div id="fileWarning" class="is-hidden model-warning">
                         ⚠️ This model doesn't support file uploads. Files will be mentioned in the prompt but not
                         processed.
                     </div>
@@ -94,7 +94,7 @@
                 <button id="model-armor-toggle" class="toggle-btn" title="Toggle Model Armor Analysis">☰</button>
             </div>
 
-            <div id="template-details-popup" class="template-popup" hidden></div>
+            <div id="template-details-popup" class="is-hidden template-popup"></div>
 
             <div class="main-container">
                 <div class="chat-section">
@@ -361,9 +361,9 @@
                                             </select>
                                         </div>
 
-                                        <div id="sdpImageWarning" class="alert alert-danger py-2 px-2 mb-2 editor-note" hidden></div>
-                                        <div id="sdpAdvancedFields" hidden>
-                                            <div id="sdpUnavailableNote" class="alert alert-warning py-2 px-2 mb-2 editor-note" hidden></div>
+                                        <div id="sdpImageWarning" class="is-hidden alert alert-danger py-2 px-2 mb-2 editor-note"></div>
+                                        <div id="sdpAdvancedFields" class="is-hidden">
+                                            <div id="sdpUnavailableNote" class="is-hidden alert alert-warning py-2 px-2 mb-2 editor-note"></div>
                                             <div class="mb-2">
                                                 <label class="form-label sm">Inspect Template <span class="info-icon" id="customInspectTemplateInfo" role="button" tabindex="0" aria-label="infoTypes this inspect template detects" hidden>?</span></label>
                                                 <select class="form-select form-select-sm" id="customInspectTemplate">
@@ -395,13 +395,13 @@
                     <div class="input-container mt-3">
                         <div class="input-group">
                             <input type="text" class="form-control" id="userInput" placeholder="Type your message...">
-                            <input type="file" class="form-control" id="fileInput"
+                            <input type="file" class="is-hidden form-control" id="fileInput"
                                 accept=".pdf,.docx,.docm,.dotx,.dotm,.pptx,.pptm,.potx,.pot,.xlsx,.xlsm,.xltx,.xltm,.png,.jpg,.jpeg,.bmp"
-                                hidden>
+                               >
                             <button class="btn btn-outline-secondary" id="fileButton" type="button">📎</button>
                             <button class="btn btn-primary" id="sendButton">Send</button>
                         </div>
-                        <div id="filePreview" class="mt-2" hidden>
+                        <div id="filePreview" class="is-hidden mt-2">
                             <small class="text-muted">Selected file: <span id="fileName"
                                     class="file-indicator"></span></small>
                             <button type="button" class="btn btn-sm btn-outline-danger ms-2"
@@ -416,18 +416,18 @@
                         <div id="promptAnalysisContent">
                             <p>Select a prompt template to see analysis.</p>
                         </div>
-                        <a class="raw-output-toggle" id="promptRawOutputToggle" hidden>Show Raw
+                        <a class="is-hidden raw-output-toggle" id="promptRawOutputToggle">Show Raw
                             Output</a>
-                        <pre class="raw-output" id="promptRawOutput" hidden></pre>
+                        <pre class="is-hidden raw-output" id="promptRawOutput"></pre>
                     </div>
                     <div id="responseAnalysis" class="model-armor-result">
                         <h3>Response Analysis</h3>
                         <div id="responseAnalysisContent">
                             <p>Select a response template to see analysis.</p>
                         </div>
-                        <a class="raw-output-toggle" id="responseRawOutputToggle" hidden>Show
+                        <a class="is-hidden raw-output-toggle" id="responseRawOutputToggle">Show
                             Raw Output</a>
-                        <pre class="raw-output" id="responseRawOutput" hidden></pre>
+                        <pre class="is-hidden raw-output" id="responseRawOutput"></pre>
                     </div>
                 </div>
             </div>
