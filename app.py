@@ -319,7 +319,7 @@ DEMO_TEMPLATES = [
         # text is redacted out of the box while images are blocked; switch SDP
         # to Basic (or clear De-identify) in the editor to screen images.
         'id': 'modelarmor-demo-us-text-image',
-        'display_name': 'US Text & Image',
+        'display_name': 'Text & Image (Text Redaction Only)',
         'modalities': ['MODALITY_TEXT', 'MODALITY_IMAGE'],
         'sdp': {'advancedConfig': {
             'inspectTemplate': US_DLP_INSPECT_TEMPLATE,
@@ -330,7 +330,7 @@ DEMO_TEMPLATES = [
         # A model response is always text, so an image-redaction template only
         # makes sense on the prompt side.
         'id': 'modelarmor-demo-us-imgredact',
-        'display_name': 'US Image Redaction (image only)',
+        'display_name': 'Image Redaction (Image Only)',
         'modalities': ['MODALITY_IMAGE'],
         'kinds': ['prompt'],
         'sdp': {'advancedConfig': {
@@ -830,6 +830,22 @@ def get_skipped_filters(response_data):
                 break
     return skipped
 
+def get_warning_messages(response_data):
+    """Distinct WARNING messages Model Armor attached to any filter result."""
+    seen, messages = set(), []
+    results = response_data.get('sanitizationResult', {}).get('filterResults', {})
+    for filter_data in results.values():
+        stack = [v for v in filter_data.values() if isinstance(v, dict)]
+        while stack:
+            node = stack.pop()
+            for item in node.get('messageItems') or []:
+                text = item.get('message', '')
+                if item.get('messageType') == 'WARNING' and text and text not in seen:
+                    seen.add(text); messages.append(text)
+            stack.extend(v for v in node.values() if isinstance(v, dict))
+    # One filter's message often wraps another's verbatim; keep only the fullest.
+    return [m for m in messages if not any(m != o and m in o for o in messages)]
+
 def get_filter_version(response_data):
     """The filter model version Model Armor actually used, e.g. 'v3 (FILTER_VERSION_ALIAS_LATEST)'."""
     cfg = (response_data.get('sanitizationResult', {})
@@ -1006,6 +1022,15 @@ def describe_scan_problems(response_data, subject):
     skipped = get_skipped_filters(response_data)
     if skipped:
         problems.append(f"Filters skipped on the {subject}: {', '.join(sorted(skipped))}.")
+    if problems:
+        # Pass Model Armor's own explanation through; it names the real cause
+        # (e.g. an image de-identify template applied to text).
+        for message in get_warning_messages(response_data):
+            problems.append(f"Model Armor: {message}")
+    if problems and subject in ('text', 'caption'):
+        problems.append("A text prompt can only be processed by a template whose De-identify "
+                        "template is a text one (infoTypeTransformations) or that has none. "
+                        "Check the template's SDP settings in the editor.")
     if problems and subject == 'image':
         # A DLP de-identify config is either text (infoTypeTransformations) or
         # image (imageTransformations). Only the latter can process an image.
@@ -1013,10 +1038,9 @@ def describe_scan_problems(response_data, subject):
                         "template is an image-redaction one (imageTransformations), or "
                         "that has no De-identify template at all. Either set this "
                         "template's SDP mode to Basic in the editor, or use the "
-                        "'US Image Redaction' template.")
+                        "'Image Redaction' template.")
     if problems and subject == 'caption':
-        problems.append("This template redacts images and cannot screen text, so a "
-                        "caption cannot be sent with the image. Send the image on its own.")
+        problems.append("Send the image on its own, without a caption.")
     return " ".join(problems) if problems else None
 
 def analyze_image_prompt(caption, file_data, template_name, location, endpoint_info):
@@ -1119,7 +1143,9 @@ async def analyze_prompt_async(prompt, file_data, prompt_template, location, end
                 'is_file': False,
                 'is_image': False,
                 'extracted_image_text': None,
-                'scan_error': None,
+                # A text scan can fail too (for example a text prompt against an
+                # image de-identify template); never treat that as clean.
+                'scan_error': describe_scan_problems(result, 'text'),
             }
     
     return await loop.run_in_executor(None, run_analysis)
@@ -1468,6 +1494,7 @@ def analyze_prompt():
             filter_results = process_rest_api_results(result)
             filter_details = summarize_filter_results(result)
             filter_version = get_filter_version(result)
+            scan_error = describe_scan_problems(result, 'text')
 
         # Common response structure
         prompt_analysis = {

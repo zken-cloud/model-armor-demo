@@ -142,11 +142,11 @@
                                             </thead>
                                             <tbody>
                                                 <tr>
-                                                    <td><strong>US Image Redaction (image only)</strong> 🖼<br><small class="text-muted">modelarmor-demo-us-imgredact-prompt</small></td>
+                                                    <td><strong>Image Redaction (Image Only)</strong> 🖼<br><small class="text-muted">modelarmor-demo-us-imgredact-prompt</small></td>
                                                     <td>Image input only, no caption. Advanced Sensitive Data Protection with an <em>image</em> de-identify template: every finding is boxed out of the picture and the <strong>redacted image is what the model receives</strong>. The reply shows the redacted image so you can see exactly what was removed. Prompt template only &mdash; a model response is text, so there is no response variant.</td>
                                                 </tr>
                                                 <tr>
-                                                    <td><strong>US Text &amp; Image</strong> 🖼<br><small class="text-muted">modelarmor-demo-us-text-image-prompt / -response</small></td>
+                                                    <td><strong>Text &amp; Image (Text Redaction Only)</strong> 🖼<br><small class="text-muted">modelarmor-demo-us-text-image-prompt / -response</small></td>
                                                     <td>Text <em>and</em> image input. Ships with Advanced Sensitive Data Protection wired to your DLP inspect and <em>text</em> de-identify templates, so sensitive values in a text prompt are <strong>redacted</strong> before the model sees them (and again on the way back via the response variant). While that text de-identify is set, an uploaded image is blocked &mdash; open <strong>Edit</strong> and set SDP Mode to <strong>Basic</strong> (or clear De-identify) to screen images and captions instead. Switch it back for text redaction.</td>
                                                 </tr>
                                             </tbody>
@@ -161,10 +161,10 @@
                                         <table class="table table-bordered table-sm">
                                             <thead class="table-light"><tr><th class="col-w-40">You want to show</th><th>Select</th></tr></thead>
                                             <tbody>
-                                                <tr><td>An image being screened (jailbreak, PII, malicious URL read out of a picture)</td><td><strong>US Text &amp; Image</strong> as the prompt template, with its SDP Mode set to <strong>Basic</strong> in the editor</td></tr>
-                                                <tr><td>PII being <em>redacted out of an image</em> before the model sees it</td><td><strong>US Image Redaction</strong> as the prompt template &mdash; attach the image and send with <em>no caption</em></td></tr>
-                                                <tr><td>PII being <em>redacted</em> from a text prompt before the model sees it</td><td><strong>US Text &amp; Image</strong> as the prompt template (its default SDP setting)</td></tr>
-                                                <tr><td>PII being redacted from the <em>model's answer</em></td><td><strong>US Text &amp; Image</strong> as the response template (works with either prompt template)</td></tr>
+                                                <tr><td>An image being screened (jailbreak, PII, malicious URL read out of a picture)</td><td><strong>Text &amp; Image (Text Redaction Only)</strong> as the prompt template, with its SDP Mode set to <strong>Basic</strong> in the editor</td></tr>
+                                                <tr><td>PII being <em>redacted out of an image</em> before the model sees it</td><td><strong>Image Redaction</strong> as the prompt template &mdash; attach the image and send with <em>no caption</em></td></tr>
+                                                <tr><td>PII being <em>redacted</em> from a text prompt before the model sees it</td><td><strong>Text &amp; Image (Text Redaction Only)</strong> as the prompt template (its default SDP setting)</td></tr>
+                                                <tr><td>PII being redacted from the <em>model's answer</em></td><td><strong>Text &amp; Image (Text Redaction Only)</strong> as the response template (works with either prompt template)</td></tr>
                                                 <tr><td>A prompt blocked outright with a canned reply</td><td>Either template, with <strong>Use default</strong> on</td></tr>
                                             </tbody>
                                         </table>
@@ -229,7 +229,7 @@
                                         <a href="{{ url_for('static', filename='model-armor-test-image.png') }}" download
                                            class="btn btn-sm btn-outline-primary">⬇ Download the sample image</a>
                                     </p>
-                                    <p>Attach it with the 📎 button and send. With <strong>US Text &amp; Image</strong> selected and its SDP Mode set to Basic, the memo trips <strong>four filters at once</strong>, all from text recognised inside the picture:</p>
+                                    <p>Attach it with the 📎 button and send. With <strong>Text &amp; Image (Text Redaction Only)</strong> selected and its SDP Mode set to Basic, the memo trips <strong>four filters at once</strong>, all from text recognised inside the picture:</p>
                                     <ul class="mb-3">
                                         <li><strong>Jailbreak / PI</strong> &mdash; the "ignore all previous instructions" line</li>
                                         <li><strong>Sensitive Data</strong> &mdash; the credit card number</li>
@@ -237,7 +237,7 @@
                                         <li><strong>Malicious URLs</strong> &mdash; the test malware link</li>
                                     </ul>
                                     <p>A caption typed alongside an image is screened as a <em>separate</em> call, because Model Armor cannot accept text and an image in one request. Results are therefore labelled <strong>(image)</strong> and <strong>(text)</strong> so you can see which half tripped which filter.</p>
-                                    <p class="mb-4">Select <strong>US Image Redaction</strong> instead and send the same image with <em>no caption</em>: the name, card number, email, phone number, IP address and SSN are boxed out in red, the reply shows that redacted picture, and the model only ever sees the redacted copy &mdash; ask it to read the card number and it cannot.</p>
+                                    <p class="mb-4">Select <strong>Image Redaction</strong> instead and send the same image with <em>no caption</em>: the name, card number, email, phone number, IP address and SSN are boxed out in red, the reply shows that redacted picture, and the model only ever sees the redacted copy &mdash; ask it to read the card number and it cannot.</p>
 
                                     <h4 class="mb-3">🚫 Blocking vs Observing</h4>
                                     <p class="mb-4">Turn <strong>Use default</strong> on and set a default response to see Model Armor block a violating prompt outright &mdash; the model is never called. Leave it off to watch the model respond anyway, which is useful for showing what unfiltered behaviour looks like. Note that the model sometimes declines a violating prompt by returning nothing at all; the app shows a placeholder rather than an empty bubble.</p>

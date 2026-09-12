@@ -877,7 +877,7 @@ function updateSdpImageWarning() {
         text = 'This is a TEXT de-identify template (infoTypeTransformations). Text prompts are ' +
                'redacted; an uploaded image cannot be processed and the request is blocked. ' +
                'To screen images with this template, set SDP Mode to Basic (or clear De-identify). ' +
-               'For image redaction use the US Image Redaction template.';
+               'For image redaction use the Image Redaction template.';
     } else if (advanced && kind === 'image') {
         text = 'This is an IMAGE de-identify template (imageTransformations). Images are redacted ' +
                'and the redacted copy is what reaches the model; text prompts and captions cannot ' +
