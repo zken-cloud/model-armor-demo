@@ -507,6 +507,9 @@ function checkFileSupport() {
     } else {
         warning.style.display = 'none';
     }
+
+    const modelNote = document.getElementById('modelNote');
+    modelNote.style.display = selectedOption && selectedOption.hasAttribute('data-image-output') ? 'block' : 'none';
 }
 
 function addMessage(message, isUser, source = null, attachmentName = null) {

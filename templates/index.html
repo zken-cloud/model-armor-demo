@@ -29,10 +29,13 @@
                     <select class="form-select" id="modelSelect">
                         <option value="">Select a model</option>
                         {% for model in foundation_models %}
-                        <option value="{{ model.display_name }}" data-provider="{{ model.provider }}" {% if loop.first %}selected{% endif %}>{{
+                        <option value="{{ model.display_name }}" data-provider="{{ model.provider }}" {% if model.image_output %}data-image-output="1"{% endif %} {% if loop.first %}selected{% endif %}>{{
                             model.display_name }} ({{model.provider}})</option>
                         {% endfor %}
                     </select>
+                    <div id="modelNote" class="is-hidden alert alert-info py-2 px-2 mt-2 mb-0 editor-note">
+                        <strong>Why this model?</strong> <code>gemini-3.8-flash</code> reads images but only ever answers in text. <code>gemini-3.1-flash-image</code> answers with an <em>image</em>, which is the only way to give the <strong>response</strong> template a picture to screen. Use it for one scenario: showing Model Armor redact an image the model <em>generates</em> &mdash; e.g. set the response template to <strong>Image Redaction</strong>, prompt template to <strong>No template</strong>, and ask for a business card with a name and email. For every other demo (screening or redacting an uploaded image, text filters) stay on <code>gemini-3.8-flash</code>.
+                    </div>
                     <div id="fileWarning" class="is-hidden model-warning">
                         ⚠️ This model doesn't support file uploads. Files will be mentioned in the prompt but not
                         processed.
@@ -242,8 +245,8 @@
 
                                     <h4 class="mb-3">🤖 Models and generated images</h4>
                                     <ul class="mb-3">
-                                        <li><strong>gemini-3.8-flash</strong> &mdash; the default. Reads text and images, answers in text.</li>
-                                        <li><strong>gemini-3.1-flash-image</strong> &mdash; returns an <em>image</em>. Use it to show the response template working on model output.</li>
+                                        <li><strong>gemini-3.8-flash</strong> &mdash; the default. Multimodal on <em>input</em>: it reads text and images, so every upload-screening and image-redaction demo on the prompt side runs on it. It answers in text only.</li>
+                                        <li><strong>gemini-3.1-flash-image</strong> &mdash; multimodal on <em>output</em> too: it can answer with a generated image. Needed for exactly one scenario &mdash; showing the <strong>response</strong> template redact an image the model <em>generates</em>. Since 3.8-flash never emits an image, there is nothing for an image-only response template to screen unless you switch to this model.</li>
                                     </ul>
                                     <p>A reply is screened <strong>part by part</strong> by the response template: its text as text, each generated image as an image. So with <strong>Image Redaction</strong> as the response template, a generated business card comes back with the name and email boxed out, and the reply shows the screened picture. A part the response template <em>cannot</em> screen &mdash; for example a text answer when the response template is image-only &mdash; is <strong>withheld</strong> and the reply says so, rather than shown unscreened.</p>
                                     <p class="mb-4">For the generated-image demo set the prompt template to <strong>No template</strong>. With Text &amp; Image on the prompt side the details are redacted <em>before</em> the model sees them, and it draws <code>[PERSON_NAME]</code> literally &mdash; correct, and worth showing, but it is the prompt template doing the work, not the response template.</p>
