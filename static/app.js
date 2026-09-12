@@ -480,8 +480,8 @@ document.getElementById('fileInput').addEventListener('change', (e) => {
         }
         if (!selectedPromptTemplateSupportsImages()) {
             alert('The selected prompt template is text-only, so Model Armor will not screen ' +
-                  'this image and the request will be blocked. Pick the "US Image Capable" ' +
-                  'prompt template to send images.');
+                  'this image and the request will be blocked. Pick a prompt template marked 🖼 ' +
+                  'to send images.');
         }
     }
 
@@ -876,7 +876,8 @@ function updateSdpImageWarning() {
     if (advanced && kind === 'text' && isPromptTemplate) {
         text = 'This is a TEXT de-identify template (infoTypeTransformations). Text prompts are ' +
                'redacted; an uploaded image cannot be processed and the request is blocked. ' +
-               'For image redaction pick an image de-identify template such as AS-MA-DLP-DEID-US-IMG.';
+               'To screen images with this template, set SDP Mode to Basic (or clear De-identify). ' +
+               'For image redaction use the US Image Redaction template.';
     } else if (advanced && kind === 'image') {
         text = 'This is an IMAGE de-identify template (imageTransformations). Images are redacted ' +
                'and the redacted copy is what reaches the model; text prompts and captions cannot ' +

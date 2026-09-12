@@ -315,15 +315,12 @@ US_DLP_IMAGE_DEIDENTIFY_TEMPLATE = os.getenv(
 
 DEMO_TEMPLATES = [
     {
-        'id': 'modelarmor-demo-us-image',
-        'display_name': 'US Image Capable',
+        # Accepts text and images. Ships with the text de-identify template, so
+        # text is redacted out of the box while images are blocked; switch SDP
+        # to Basic (or clear De-identify) in the editor to screen images.
+        'id': 'modelarmor-demo-us-text-image',
+        'display_name': 'US Text & Image',
         'modalities': ['MODALITY_TEXT', 'MODALITY_IMAGE'],
-        'sdp': {'basicConfig': {'filterEnforcement': 'ENABLED'}},
-    },
-    {
-        'id': 'modelarmor-demo-us-dlp',
-        'display_name': 'US Advanced DLP (text only)',
-        'modalities': ['MODALITY_TEXT'],
         'sdp': {'advancedConfig': {
             'inspectTemplate': US_DLP_INSPECT_TEMPLATE,
             'deidentifyTemplate': US_DLP_DEIDENTIFY_TEMPLATE,
@@ -1014,8 +1011,9 @@ def describe_scan_problems(response_data, subject):
         # image (imageTransformations). Only the latter can process an image.
         problems.append("Images can only be screened by a template whose De-identify "
                         "template is an image-redaction one (imageTransformations), or "
-                        "that has no De-identify template at all. Use the 'US Image "
-                        "Redaction' or 'US Image Capable' template for images.")
+                        "that has no De-identify template at all. Either set this "
+                        "template's SDP mode to Basic in the editor, or use the "
+                        "'US Image Redaction' template.")
     if problems and subject == 'caption':
         problems.append("This template redacts images and cannot screen text, so a "
                         "caption cannot be sent with the image. Send the image on its own.")
