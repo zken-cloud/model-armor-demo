@@ -81,7 +81,7 @@ function populateTemplateSelects(data, selectedPromptName = null, selectedRespon
     promptSelect.innerHTML = '<option value="">No template</option>';
     data.prompt_templates.forEach(t => {
         promptTemplatesMap.set(t.name, t);
-        promptSelect.innerHTML += `<option value="${escapeHtml(t.name)}" data-updated="${escapeHtml(t.last_updated)}" data-supports-images="${t.supports_images ? 'true' : 'false'}">${escapeHtml(t.display_name)}${t.supports_images ? ' 🖼' : ''}</option>`;
+        promptSelect.innerHTML += `<option value="${escapeHtml(t.name)}" data-updated="${escapeHtml(t.last_updated)}" data-supports-images="${t.supports_images ? 'true' : 'false'}" data-supports-text="${t.supports_text === false ? 'false' : 'true'}">${escapeHtml(t.display_name)}${t.supports_images ? ' 🖼' : ''}</option>`;
     });
  
     responseSelect.innerHTML = '<option value="">No template</option>';
@@ -354,7 +354,9 @@ function fillDlpSelect(selectId, templates, currentValue) {
     templates.forEach(t => {
         const option = document.createElement('option');
         option.value = t.id;
-        option.textContent = t.display_name === t.id ? t.id : `${t.display_name} (${t.id})`;
+        const label = t.display_name === t.id ? t.id : `${t.display_name} (${t.id})`;
+        option.textContent = t.kind ? `${label} [${t.kind}]` : label;
+        if (t.kind) option.dataset.kind = t.kind;
         const detail = describeInfoTypes(t.info_types);
         option.dataset.infoTypes = detail;
         option.dataset.infoTypesFull = fullInfoTypeList(t.info_types);
@@ -449,6 +451,13 @@ function isImageFile(file) {
     return IMAGE_EXTENSIONS.includes(file.name.split('.').pop().toLowerCase());
 }
 
+function selectedPromptTemplateSupportsText() {
+    const select = document.getElementById('promptTemplate');
+    const option = select.options[select.selectedIndex];
+    if (!option || !option.value) return true;
+    return option.getAttribute('data-supports-text') !== 'false';
+}
+
 // Image capability is a property of the selected prompt template
 // (its modalities), not of the region.
 function selectedPromptTemplateSupportsImages() {
@@ -522,12 +531,27 @@ function addMessage(message, isUser, source = null, attachmentName = null) {
     chatContainer.scrollTop = chatContainer.scrollHeight;
 }
 
-function updateBotMessage(text, source) {
+function updateBotMessage(text, source, redactedImage = null) {
     const loadingMessage = document.getElementById('loading-message');
     if (loadingMessage) {
         const html = converter.makeHtml(text);
         const manipulatedHtml = html.replace(/\[([A-Z_]+)\]/g, '<span class="model-armor-transform">[$1]</span>');
         loadingMessage.innerHTML = DOMPurify.sanitize(manipulatedHtml);
+
+        if (redactedImage) {
+            // The picture Model Armor actually handed to the model, findings boxed out.
+            const figure = document.createElement('figure');
+            figure.className = 'redacted-figure';
+            const img = document.createElement('img');
+            img.src = redactedImage;            // data: URL, permitted by img-src
+            img.alt = 'Image after Model Armor redaction';
+            img.className = 'redacted-image';
+            const caption = document.createElement('figcaption');
+            caption.textContent = 'Image as redacted by Model Armor — this is what the model received';
+            figure.appendChild(img);
+            figure.appendChild(caption);
+            loadingMessage.insertBefore(figure, loadingMessage.firstChild);
+        }
 
         if (source) {
             const sourceDiv = document.createElement('div');
@@ -600,6 +624,11 @@ async function sendMessage() {
 
     if ((!message && !selectedFile) || !modelSelect.value) {
         alert('Please enter a message or select a file, and choose a model');
+        return;
+    }
+    if (message && !selectedPromptTemplateSupportsText()) {
+        alert('The selected prompt template screens images only and cannot process text, ' +
+              'so a caption cannot be sent with the image. Clear the message and send the image on its own.');
         return;
     }
 
@@ -700,7 +729,8 @@ async function sendMessage() {
             throw new Error(chatData.error || `HTTP error! status: ${chatResponse.status}`);
         }
 
-        updateBotMessage(chatData.response, chatData.source);
+        updateBotMessage(chatData.response, chatData.source,
+            chatData.model_armor.prompt_analysis && chatData.model_armor.prompt_analysis.redacted_image);
         // The prompt analysis from the /chat call is now the definitive one.
         if (chatData.model_armor.prompt_analysis) {
             updateVisualAnalysis('prompt', chatData.model_armor.prompt_analysis);
@@ -836,12 +866,25 @@ function updateSdpImageWarning() {
     if (!warning) return;
     const advanced = document.getElementById('customSdpMode').value === 'Advanced';
     const deidentify = document.getElementById('customDeidentifyTemplate');
-    const hasDeidentify = !!(deidentify && deidentify.value);
-    // Only the prompt template ever receives an image; a model response is
-    // always text, so de-identify is safe on the response template.
+    const option = deidentify && deidentify.options[deidentify.selectedIndex];
+    const kind = option && option.value ? (option.dataset.kind || 'text') : '';
     const isPromptTemplate = (document.getElementById('customTemplateName').value || '')
         .endsWith('-prompt');
-    warning.style.display = advanced && hasDeidentify && isPromptTemplate ? 'block' : 'none';
+    // A DLP de-identify config is either text or image, never both. Say which
+    // kind of input this template will therefore refuse.
+    let text = '';
+    if (advanced && kind === 'text' && isPromptTemplate) {
+        text = 'This is a TEXT de-identify template (infoTypeTransformations). Text prompts are ' +
+               'redacted; an uploaded image cannot be processed and the request is blocked. ' +
+               'For image redaction pick an image de-identify template such as AS-MA-DLP-DEID-US-IMG.';
+    } else if (advanced && kind === 'image') {
+        text = 'This is an IMAGE de-identify template (imageTransformations). Images are redacted ' +
+               'and the redacted copy is what reaches the model; text prompts and captions cannot ' +
+               'be processed and are blocked, so this belongs on an image-only prompt template.' +
+               (isPromptTemplate ? '' : ' A response template is always text, so it will fail here.');
+    }
+    warning.textContent = text;
+    warning.style.display = text ? 'block' : 'none';
 }
 
 async function openCustomizationModal(type) {

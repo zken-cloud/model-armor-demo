@@ -677,6 +677,11 @@ h1 {
 .info-icon:hover, .info-icon:focus { background-color: var(--google-blue); color: #fff; outline: none; }
 .tooltip-inner { max-width: 420px; text-align: left; }
 
+/* Redacted image shown in a bot reply */
+.redacted-figure { margin: 0 0 0.75rem 0; }
+.redacted-image { max-width: 100%; border: 2px solid #d93025; border-radius: 4px; display: block; }
+.redacted-figure figcaption { font-size: 0.75rem; color: #5f6368; margin-top: 0.25rem; }
+
 /* Initial hidden state; JS shows elements by setting an inline display, which
    overrides this. Keep it last so it wins ties with other class rules. */
 [hidden] { display: none; }

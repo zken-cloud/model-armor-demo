@@ -295,14 +295,23 @@ DEFAULT_CONFIDENCE_LEVEL = 'HIGH'
 DEFAULT_FILTER_VERSION_ALIAS = 'FILTER_VERSION_ALIAS_LATEST'
 DEFAULT_RAI_FILTER_TYPES = ['HATE_SPEECH', 'DANGEROUS', 'HARASSMENT', 'SEXUALLY_EXPLICIT']
 
-# DLP templates the advanced-SDP demo template points at. De-identification is
-# not supported for image input, so that template is text-only by design.
+# DLP templates the advanced-SDP demo templates point at. A DLP de-identify
+# config is either infoTypeTransformations (text) or imageTransformations
+# (images), never both, so text redaction and image redaction need separate
+# Model Armor templates. The image inspect template must not use a stored
+# custom infoType, which image redaction rejects.
 US_DLP_INSPECT_TEMPLATE = os.getenv(
     'MODEL_ARMOR_DLP_INSPECT_TEMPLATE',
     f"projects/{project}/locations/us/inspectTemplates/AS-MA-DLP-INS-US")
 US_DLP_DEIDENTIFY_TEMPLATE = os.getenv(
     'MODEL_ARMOR_DLP_DEIDENTIFY_TEMPLATE',
     f"projects/{project}/locations/us/deidentifyTemplates/AS-MA-DLP-DEID-US")
+US_DLP_IMAGE_INSPECT_TEMPLATE = os.getenv(
+    'MODEL_ARMOR_DLP_IMAGE_INSPECT_TEMPLATE',
+    f"projects/{project}/locations/us/inspectTemplates/AS-MA-DLP-INS-US-IMG")
+US_DLP_IMAGE_DEIDENTIFY_TEMPLATE = os.getenv(
+    'MODEL_ARMOR_DLP_IMAGE_DEIDENTIFY_TEMPLATE',
+    f"projects/{project}/locations/us/deidentifyTemplates/AS-MA-DLP-DEID-US-IMG")
 
 DEMO_TEMPLATES = [
     {
@@ -320,10 +329,22 @@ DEMO_TEMPLATES = [
             'deidentifyTemplate': US_DLP_DEIDENTIFY_TEMPLATE,
         }},
     },
+    {
+        # A model response is always text, so an image-redaction template only
+        # makes sense on the prompt side.
+        'id': 'modelarmor-demo-us-imgredact',
+        'display_name': 'US Image Redaction (image only)',
+        'modalities': ['MODALITY_IMAGE'],
+        'kinds': ['prompt'],
+        'sdp': {'advancedConfig': {
+            'inspectTemplate': US_DLP_IMAGE_INSPECT_TEMPLATE,
+            'deidentifyTemplate': US_DLP_IMAGE_DEIDENTIFY_TEMPLATE,
+        }},
+    },
 ]
 DEMO_TEMPLATE_DISPLAY_NAMES = {
     f"{spec['id']}-{kind}": spec['display_name']
-    for spec in DEMO_TEMPLATES for kind in ('prompt', 'response')
+    for spec in DEMO_TEMPLATES for kind in spec.get('kinds', ('prompt', 'response'))
 }
 
 def build_template_payload(spec):
@@ -439,7 +460,7 @@ def ensure_demo_templates_exist():
 
             for spec in DEMO_TEMPLATES:
                 payload = build_template_payload(spec)
-                for template_id in (f"{spec['id']}-prompt", f"{spec['id']}-response"):
+                for template_id in [f"{spec['id']}-{kind}" for kind in spec.get('kinds', ('prompt', 'response'))]:
                     if template_id in existing:
                         outcome = reconcile_demo_template(
                             base_url, template_id, existing[template_id], spec, headers
@@ -691,6 +712,7 @@ def fetch_model_armor_templates(location, endpoint):
                 'name': template_name,
                 'display_name': DEMO_TEMPLATE_DISPLAY_NAMES.get(template_name, template_name),
                 'supports_images': 'MODALITY_IMAGE' in modalities,
+                'supports_text': 'MODALITY_TEXT' in modalities or not modalities,
                 'location': location,
                 'last_updated': update_time_str, # Just use the string from API
                 'config': config_dict
@@ -722,7 +744,10 @@ def get_filter_verdict(filter_data, key):
     """The dict holding matchState/executionState for one filter result."""
     inner = next((v for v in filter_data.values() if isinstance(v, dict)), {})
     if key == 'sdp':
-        return inner.get('inspectResult') or inner.get('deidentifyResult') or inner
+        # text de-identify -> deidentifyResult, image redaction -> redactResult,
+        # basic / inspect-only -> inspectResult
+        return (inner.get('redactResult') or inner.get('deidentifyResult')
+                or inner.get('inspectResult') or inner)
     return inner
 
 def describe_filter_match(key, verdict):
@@ -816,6 +841,14 @@ def get_filter_version(response_data):
     if version and alias:
         return f"{version} ({alias})"
     return version or alias or None
+
+def get_redacted_image(response_data):
+    """Base64 PNG of the image with SDP findings boxed out, when the template redacts images."""
+    try:
+        return (response_data['sanitizationResult']['filterResults']['sdp']
+                ['sdpFilterResult']['redactResult'].get('redactedImage'))
+    except (KeyError, TypeError):
+        return None
 
 def get_extracted_image_text(response_data):
     """OCR text Model Armor read out of a screened image."""
@@ -977,19 +1010,24 @@ def describe_scan_problems(response_data, subject):
     if skipped:
         problems.append(f"Filters skipped on the {subject}: {', '.join(sorted(skipped))}.")
     if problems and subject == 'image':
-        # A de-identify template disables image screening: every image filter is
-        # skipped. An inspect-only advanced config screens images normally.
-        problems.append("A De-identify template on the prompt template blocks image "
-                        "screening. Clear that field to screen images; an Inspect "
-                        "template on its own is fine, and De-identify still works for "
-                        "text prompts and for the response template.")
+        # A DLP de-identify config is either text (infoTypeTransformations) or
+        # image (imageTransformations). Only the latter can process an image.
+        problems.append("Images can only be screened by a template whose De-identify "
+                        "template is an image-redaction one (imageTransformations), or "
+                        "that has no De-identify template at all. Use the 'US Image "
+                        "Redaction' or 'US Image Capable' template for images.")
+    if problems and subject == 'caption':
+        problems.append("This template redacts images and cannot screen text, so a "
+                        "caption cannot be sent with the image. Send the image on its own.")
     return " ".join(problems) if problems else None
 
-def analyze_image_prompt(prompt, file_data, template_name, location, endpoint_info):
-    """Screen an image, and its accompanying text separately.
+def analyze_image_prompt(caption, file_data, template_name, location, endpoint_info):
+    """Screen an image, and the caption the user typed with it, separately.
 
     userPromptData is a oneof, so `text` and `byteItem` cannot go in one request;
-    an image prompt with a caption therefore needs two sanitize calls.
+    an image prompt with a caption therefore needs two sanitize calls. Only the
+    user's own caption is screened as text; the placeholder the app supplies
+    when there is no caption is not user content.
     """
     if not endpoint_info.get('supports_images'):
         message = (f"Image screening is only supported in the us and eu multi-regions; "
@@ -999,6 +1037,7 @@ def analyze_image_prompt(prompt, file_data, template_name, location, endpoint_in
             'filter_results': [],
             'filter_details': [],
             'sdp_transformed_text': None,
+            'redacted_image_base64': None,
             'is_file': True,
             'is_image': True,
             'extracted_image_text': None,
@@ -1015,19 +1054,27 @@ def analyze_image_prompt(prompt, file_data, template_name, location, endpoint_in
     filter_details = summarize_filter_results(image_result, scope='image')
     sections = ["=== IMAGE SCAN ===", json.dumps(image_result, indent=2)]
 
-    text = (prompt or '').strip()
+    sdp_transformed_text = None
+    text = (caption or '').strip()
     if text:
         text_result = sanitize_text_prompt_optimized(text, template_name, location, endpoint_info)
+        # The caption is user content too: if its scan did not run, fail closed
+        # on it exactly as for the image.
+        text_error = describe_scan_problems(text_result, 'caption')
+        if text_error:
+            scan_error = f"{scan_error} {text_error}" if scan_error else text_error
         filter_results += [f"{name} (text)" for name in process_rest_api_results(text_result)]
         filter_details += summarize_filter_results(text_result, scope='text')
+        sdp_transformed_text = check_sdp_transformation_for_file(text_result)
         sections += ["", "=== TEXT SCAN ===", json.dumps(text_result, indent=2)]
 
     return {
         'output_str': "\n".join(sections),
         'filter_results': filter_results,
         'filter_details': filter_details,
-        # Basic SDP reports findings on images; it does not hand back a redacted image.
-        'sdp_transformed_text': None,
+        'sdp_transformed_text': sdp_transformed_text,
+        # Present when the template's de-identify config has imageTransformations.
+        'redacted_image_base64': get_redacted_image(image_result),
         'is_file': True,
         'is_image': True,
         'extracted_image_text': get_extracted_image_text(image_result),
@@ -1035,13 +1082,13 @@ def analyze_image_prompt(prompt, file_data, template_name, location, endpoint_in
         'scan_error': scan_error,
     }
 
-async def analyze_prompt_async(prompt, file_data, prompt_template, location, endpoint_info):
-    """Async wrapper for prompt analysis"""
+async def analyze_prompt_async(prompt, file_data, prompt_template, location, endpoint_info, caption=None):
+    """Async wrapper for prompt analysis. `caption` is the user's own text for an image prompt."""
     loop = asyncio.get_event_loop()
     
     def run_analysis():
         if file_data and file_data.get('is_image'):
-            return analyze_image_prompt(prompt, file_data, prompt_template, location, endpoint_info)
+            return analyze_image_prompt(caption, file_data, prompt_template, location, endpoint_info)
         elif file_data:
             result = sanitize_file_prompt_with_rest_api_optimized(
                 file_data['base64_data'], file_data['mime_type'], 
@@ -1105,6 +1152,7 @@ async def process_chat_async(prompt, model_info, system_instruction, file_data,
     """
     prompt_analysis = None
     prompt_has_violations = False
+    image_redacted = False
     
     # These will be the final inputs for the LLM call
     prompt_for_llm = prompt 
@@ -1113,7 +1161,9 @@ async def process_chat_async(prompt, model_info, system_instruction, file_data,
     # --- Step 1: Analyze the prompt/file FIRST ---
     if prompt_template:
         print("INFO: Analyzing prompt/file with Model Armor...")
-        prompt_analysis_result = await analyze_prompt_async(prompt, file_data, prompt_template, location, endpoint_info)
+        prompt_analysis_result = await analyze_prompt_async(
+            prompt, file_data, prompt_template, location, endpoint_info, caption=prompt_text
+        )
         
         filter_results = prompt_analysis_result['filter_results']
         output_str = prompt_analysis_result['output_str']
@@ -1140,6 +1190,16 @@ async def process_chat_async(prompt, model_info, system_instruction, file_data,
             print(f"INFO: Using redacted text prompt for LLM: '{sdp_transformed_text}'")
         # *** END THE FIX ***
 
+        redacted_image_base64 = prompt_analysis_result.get('redacted_image_base64')
+        if redacted_image_base64:
+            # Model Armor boxed the findings out of the picture: the model gets the
+            # redacted PNG, never the original bytes.
+            file_data_for_llm = dict(file_data, base64_data=redacted_image_base64, mime_type='image/png')
+            image_redacted = True
+            if prompt_analysis_result.get('is_image') and sdp_transformed_text:
+                prompt_for_llm = sdp_transformed_text
+            print("INFO: Sending the redacted image to the model instead of the original.")
+
         details = "❌ Violations found:\n" + "\n".join(f"• {result}" for result in filter_results) if filter_results else "✅ No template violations found"
         prompt_analysis = {
             'template': prompt_template, 'status': 'fail' if filter_results else 'pass',
@@ -1147,7 +1207,9 @@ async def process_chat_async(prompt, model_info, system_instruction, file_data,
             'filter_results': filter_results, 'raw_output': output_str,
             'filter_details': prompt_analysis_result.get('filter_details') or [],
             'extracted_image_text': prompt_analysis_result.get('extracted_image_text'),
-            'filter_version': prompt_analysis_result.get('filter_version')
+            'filter_version': prompt_analysis_result.get('filter_version'),
+            'redacted_image': (f"data:image/png;base64,{redacted_image_base64}"
+                               if prompt_analysis_result.get('redacted_image_base64') else None)
         }
 
         # Fail closed: content Model Armor did not actually screen must not reach the model.
@@ -1179,6 +1241,8 @@ async def process_chat_async(prompt, model_info, system_instruction, file_data,
     
     # --- Step 3: Analyze the response (as before) ---
     source = model_info.get('provider')
+    if image_redacted:
+        source = f"{source} — image redacted by Model Armor before the model saw it"
     response_analysis = None
     if response_template:
         print("INFO: Analyzing response with Model Armor...")
@@ -1219,6 +1283,15 @@ def _dlp_info_types_from_inspect(template):
     info_types = (template.get('inspectConfig', {}) or {}).get('infoTypes') or []
     return [i.get('name') for i in info_types if i.get('name')]
 
+def _dlp_deidentify_kind(template):
+    """'image' for imageTransformations, 'text' for infoTypeTransformations.
+
+    The two are mutually exclusive in a DeidentifyConfig, and Model Armor can
+    only apply an image one to image input and a text one to text input.
+    """
+    config = template.get('deidentifyConfig', {}) or {}
+    return 'image' if config.get('imageTransformations') else 'text'
+
 def _dlp_info_types_from_deidentify(template):
     """infoTypes a deidentify template transforms.
 
@@ -1226,6 +1299,16 @@ def _dlp_info_types_from_deidentify(template):
     rather than an empty list that would read as "nothing".
     """
     config = template.get('deidentifyConfig', {}) or {}
+    image = (config.get('imageTransformations', {}) or {}).get('transforms') or []
+    if image:
+        names, applies_to_all = [], False
+        for transform in image:
+            if 'allInfoTypes' in transform or 'allText' in transform:
+                applies_to_all = True
+            names.extend(i.get('name') for i in (transform.get('selectedInfoTypes', {}) or {}).get('infoTypes', []) if i.get('name'))
+        if applies_to_all and not names:
+            return ['(every finding from the inspect template, boxed out of the image)']
+        return names
     transformations = (config.get('infoTypeTransformations', {}) or {}).get('transformations') or []
     names, applies_to_all = [], False
     for transformation in transformations:
@@ -1278,11 +1361,14 @@ def fetch_dlp_templates(location):
                 continue
             for template in resp.json().get(kind, []):
                 template_id = template.get('name', '').split('/')[-1]
-                result[list_field].append({
+                entry = {
                     'id': template_id,
                     'display_name': template.get('displayName') or template_id,
                     'info_types': extractor(template),
-                })
+                }
+                if kind == 'deidentifyTemplates':
+                    entry['kind'] = _dlp_deidentify_kind(template)
+                result[list_field].append(entry)
         except Exception as e:
             print(f"Error listing {kind} in {location}: {e}")
 
@@ -1316,6 +1402,7 @@ def analyze_prompt():
         filter_results = []
         filter_details = []
         filter_version = None
+        redacted_image = None
         output_str = ""
         scan_error = None
 
@@ -1352,6 +1439,8 @@ def analyze_prompt():
                 filter_details = analysis['filter_details']
                 filter_version = analysis['filter_version']
                 scan_error = analysis['scan_error']
+                if analysis.get('redacted_image_base64'):
+                    redacted_image = f"data:image/png;base64,{analysis['redacted_image_base64']}"
             else:
                 result = sanitize_file_prompt_with_rest_api_optimized(
                     file_data_base64, mime_type, prompt_template, location, endpoint_info['endpoint']
@@ -1388,6 +1477,7 @@ def analyze_prompt():
             'status': 'error' if scan_error else ('fail' if filter_results else 'pass'),
             'filter_details': filter_details,
             'filter_version': filter_version,
+            'redacted_image': redacted_image,
             'raw_output': f"⚠️ {scan_error}\n\n{output_str}" if scan_error else output_str
         }
         
