@@ -287,6 +287,9 @@ generation_config = types.GenerateContentConfig(
 
 foundation_models = [
     {"name": "gemini-3.8-flash", "provider": "Google", "location": "global", "display_name": "gemini-3.8-flash"},
+    # Returns images, so a response template can be exercised on image output.
+    {"name": "gemini-3.1-flash-image", "provider": "Google", "location": "global",
+     "display_name": "gemini-3.1-flash-image (image output)", "image_output": True},
 ]
 
 # Demo template defaults: every filter at "High and above" and the latest filter
@@ -327,12 +330,10 @@ DEMO_TEMPLATES = [
         }},
     },
     {
-        # A model response is always text, so an image-redaction template only
-        # makes sense on the prompt side.
+        # On the response side this screens images the model generates.
         'id': 'modelarmor-demo-us-imgredact',
         'display_name': 'Image Redaction (Image Only)',
         'modalities': ['MODALITY_IMAGE'],
-        'kinds': ['prompt'],
         'sdp': {'advancedConfig': {
             'inspectTemplate': US_DLP_IMAGE_INSPECT_TEMPLATE,
             'deidentifyTemplate': US_DLP_IMAGE_DEIDENTIFY_TEMPLATE,
@@ -501,11 +502,13 @@ def _generate_with_sdk(prompt, model_info, system_instruction, file_data=None):
         })
         
     # Create a new config incorporating the system instruction
+    # Ask an image-capable model for images too; others reject that modality.
+    modalities = ["TEXT", "IMAGE"] if model_info.get('image_output') else generation_config.response_modalities
     config = types.GenerateContentConfig(
         max_output_tokens=generation_config.max_output_tokens,
         temperature=generation_config.temperature,
         top_p=generation_config.top_p,
-        response_modalities=generation_config.response_modalities,
+        response_modalities=modalities,
         safety_settings=generation_config.safety_settings,
         system_instruction=system_instruction if system_instruction else None
     )
@@ -516,18 +519,29 @@ def _generate_with_sdk(prompt, model_info, system_instruction, file_data=None):
         config=config
     )
 
-    if response.text:
-        return response.text
+    # Split the reply into its text and any generated images. Each is screened
+    # separately on the response side, in its own modality.
+    texts, images = [], []
+    candidate = response.candidates[0] if response.candidates else None
+    for part in (getattr(getattr(candidate, 'content', None), 'parts', None) or []):
+        if getattr(part, 'text', None):
+            texts.append(part.text)
+        elif getattr(part, 'inline_data', None) and part.inline_data.data:
+            images.append({
+                'mime_type': part.inline_data.mime_type or 'image/png',
+                'base64_data': base64.b64encode(part.inline_data.data).decode('utf-8'),
+            })
+    text = "".join(texts)
 
-    # A thinking model can decline by returning a candidate with no text parts
-    # (and sometimes no finish reason at all). Returning None from here breaks
-    # response screening and the UI, so always hand back a string.
-    finish_reason = None
-    if response.candidates:
-        finish_reason = getattr(response.candidates[0], 'finish_reason', None)
-    print(f"WARNING: {model_info['name']} returned no text (finish_reason={finish_reason}).")
-    detail = f" (finish reason: {finish_reason})" if finish_reason else ""
-    return f"[The model returned no content{detail}.]"
+    if not text and not images:
+        # A thinking model can decline by returning a candidate with no parts
+        # (and sometimes no finish reason at all). Always hand back something.
+        finish_reason = getattr(candidate, 'finish_reason', None) if candidate else None
+        print(f"WARNING: {model_info['name']} returned no content (finish_reason={finish_reason}).")
+        detail = f" (finish reason: {finish_reason})" if finish_reason else ""
+        text = f"[The model returned no content{detail}.]"
+
+    return {'text': text, 'images': images}
 
 def generate_model_response(prompt, model_info, system_instruction, file_data=None):
     """Original generation function using SDK"""
@@ -881,27 +895,94 @@ def check_sdp_transformation_for_file(response_data):
         print(f"Error extracting SDP transformation from file JSON: {e}")
     return None
 
-def analyze_response_with_template(response_text, template_name, location, endpoint, use_default_response):
-    template_display_name = template_name
-    try:
-        result = sanitize_via_rest(
-            'sanitizeModelResponse', 'modelResponseData', {"text": response_text},
-            template_name, location, endpoint,
-        )
-        output_str = json.dumps(result, indent=2)
-        filter_results = process_rest_api_results(result)
+def analyze_model_response(model_result, template_name, location, endpoint, use_default_response):
+    """Screen a model reply part by part: its text as text, each generated image as an image.
 
-        sdp_text = check_sdp_transformation_for_file(result)
-        has_sdp = 'sdp' in filter_results
+    The response template is applied to every part. A part whose scan does not
+    run (for example text against an image-only template) is withheld rather
+    than shown, so nothing unscreened reaches the user.
+    """
+    text = model_result.get('text') or ''
+    images = model_result.get('images') or []
+    filter_results, filter_details, sections, withheld = [], [], [], []
+    filter_version = None
+    screened_text, screened_images = text, []
+    text_redacted = image_redacted = False
 
-        if sdp_text and has_sdp and not use_default_response:
-            response_text = sdp_text
+    if text:
+        try:
+            result = sanitize_via_rest('sanitizeModelResponse', 'modelResponseData', {"text": text},
+                                       template_name, location, endpoint)
+            sections += ["=== RESPONSE TEXT ===", json.dumps(result, indent=2)]
+            problem = describe_scan_problems(result, 'response text')
+            if problem:
+                withheld.append(f"Text withheld: {problem}")
+                screened_text = ''
+            else:
+                filter_results += [f"{name} (text)" for name in process_rest_api_results(result)]
+                filter_details += summarize_filter_results(result, scope='text')
+                filter_version = filter_version or get_filter_version(result)
+                redacted = check_sdp_transformation_for_file(result)
+                if redacted and 'sdp (text)' in filter_results and not use_default_response:
+                    screened_text, text_redacted = redacted, True
+        except Exception as e:
+            print(f"Error screening response text: {e}")
+            withheld.append(f"Text withheld: response screening failed ({e}).")
+            screened_text = ''
 
-        details = "❌ Violations found:\n" + "\n".join(f"• {result}" for result in filter_results) if filter_results else "✅ No template violations found"
-        return {'response_text': response_text, 'analysis': {'template': template_display_name, 'status': 'fail' if filter_results else 'pass', 'details': details, 'matches': bool(filter_results), 'filter_results': filter_results, 'raw_output': output_str, 'filter_details': summarize_filter_results(result), 'filter_version': get_filter_version(result)}, 'has_violations': bool(filter_results), 'has_sdp': has_sdp}
-    except Exception as e:
-        print(f"Error in response analysis: {e}")
-        return {'response_text': response_text, 'analysis': {'template': template_display_name, 'status': 'error', 'details': f'Error in Model Armor analysis: {e}', 'matches': False, 'raw_output': str(e)}, 'has_violations': False}
+    for index, image in enumerate(images, 1):
+        try:
+            approx_bytes = (len(image['base64_data']) * 3) // 4
+            if approx_bytes > MAX_IMAGE_BYTES:
+                withheld.append(f"Image {index} withheld: {approx_bytes // (1024 * 1024)}MB exceeds the 4MB screening limit.")
+                continue
+            result = sanitize_via_rest('sanitizeModelResponse', 'modelResponseData',
+                                       {"byteItem": {"byteDataType": "IMAGE", "byteData": image['base64_data']}},
+                                       template_name, location, endpoint)
+            sections += [f"=== RESPONSE IMAGE {index} ===", json.dumps(result, indent=2)]
+            problem = describe_scan_problems(result, 'response image')
+            if problem:
+                withheld.append(f"Image {index} withheld: {problem}")
+                continue
+            filter_results += [f"{name} (image)" for name in process_rest_api_results(result)]
+            filter_details += summarize_filter_results(result, scope='image')
+            filter_version = filter_version or get_filter_version(result)
+            # Model Armor returns redactedImage even when nothing matched (an
+            # untouched copy), so only call it a redaction when SDP matched.
+            redacted_image = get_redacted_image(result)
+            if redacted_image and 'sdp (image)' in filter_results:
+                image_redacted = True
+                screened_images.append({'mime_type': 'image/png', 'base64_data': redacted_image})
+            else:
+                screened_images.append(image)
+        except Exception as e:
+            print(f"Error screening response image {index}: {e}")
+            withheld.append(f"Image {index} withheld: response screening failed ({e}).")
+
+    has_violations = bool(filter_results)
+    details = ("❌ Violations found:\n" + "\n".join(f"• {r}" for r in filter_results)) if filter_results \
+              else "✅ No template violations found"
+    if withheld:
+        details += "\n" + "\n".join(f"⚠️ {w}" for w in withheld)
+    analysis = {
+        'template': template_name,
+        'status': 'error' if (withheld and not filter_results) else ('fail' if filter_results else 'pass'),
+        'details': details,
+        'matches': has_violations,
+        'filter_results': filter_results,
+        'filter_details': filter_details,
+        'filter_version': filter_version,
+        'raw_output': "\n".join(sections) if sections else "(nothing to screen)",
+    }
+    return {
+        'text': screened_text,
+        'images': screened_images,
+        'withheld': withheld,
+        'analysis': analysis,
+        'has_violations': has_violations,
+        'text_redacted': text_redacted,
+        'image_redacted': image_redacted,
+    }
 
 TEMPLATE_NAME_PATTERN = re.compile(r'^[A-Za-z0-9_-]{1,63}$')
 
@@ -1160,7 +1241,7 @@ async def analyze_response_async(response_text, response_template, location, end
     loop = asyncio.get_event_loop()
     
     def run_analysis():
-        return analyze_response_with_template(
+        return analyze_model_response(
             response_text, response_template, location, endpoint_info['endpoint'], use_default_response
         )
     
@@ -1215,7 +1296,7 @@ async def process_chat_async(prompt, model_info, system_instruction, file_data,
         # *** END THE FIX ***
 
         redacted_image_base64 = prompt_analysis_result.get('redacted_image_base64')
-        if redacted_image_base64:
+        if redacted_image_base64 and 'sdp (image)' in filter_results:
             # Model Armor boxed the findings out of the picture: the model gets the
             # redacted PNG, never the original bytes.
             file_data_for_llm = dict(file_data, base64_data=redacted_image_base64, mime_type='image/png')
@@ -1244,6 +1325,7 @@ async def process_chat_async(prompt, model_info, system_instruction, file_data,
             prompt_analysis['details'] = f"⚠️ {scan_error}"
             return {
                 'response': f"Request blocked — {scan_error}",
+                'response_images': [],
                 'prompt_analysis': prompt_analysis,
                 'response_analysis': None,
                 'source': 'Demo app — blocked before the model was called'
@@ -1254,6 +1336,7 @@ async def process_chat_async(prompt, model_info, system_instruction, file_data,
         print("INFO: Prompt violation found, using default response.")
         return {
             'response': default_response,
+            'response_images': [],
             'prompt_analysis': prompt_analysis,
             'response_analysis': None,
             'source': 'Default response — Model Armor blocked the prompt, the model was not called'
@@ -1263,30 +1346,37 @@ async def process_chat_async(prompt, model_info, system_instruction, file_data,
     print(f"INFO: Generating content with model '{model_info['name']}'.")
     model_response = await generate_response_async(prompt_for_llm, model_info, system_instruction, file_data_for_llm)
     
-    # --- Step 3: Analyze the response (as before) ---
+    # --- Step 3: Analyze the response, part by part ---
     source = model_info.get('provider')
     if image_redacted:
         source = f"{source} — image redacted by Model Armor before the model saw it"
+    response_text = model_response.get('text') or ''
+    response_images = model_response.get('images') or []
     response_analysis = None
     if response_template:
         print("INFO: Analyzing response with Model Armor...")
         response_result = await analyze_response_async(model_response, response_template, location, endpoint_info, use_default_response)
         response_analysis = response_result['analysis']
-        if response_result['has_violations']:
-            if use_default_response:
-                print("INFO: Response violation found, using default response.")
-                model_response = default_response
-                source = 'Default response — Model Armor blocked the model output'
-            else:
-                # Use the redacted response if available
-                redacted = response_result.get('response_text', model_response)
-                if redacted != model_response:
-                    source = f"{model_info.get('provider')} — redacted by Model Armor"
-                model_response = redacted
-                print("INFO: Response violation found, using redacted response.")
+        if response_result['has_violations'] and use_default_response:
+            print("INFO: Response violation found, using default response.")
+            response_text, response_images = default_response, []
+            source = 'Default response — Model Armor blocked the model output'
+        else:
+            response_text, response_images = response_result['text'], response_result['images']
+            changed = []
+            if response_result['text_redacted']:
+                changed.append('text')
+            if response_result['image_redacted']:
+                changed.append('image')
+            if changed:
+                source = f"{model_info.get('provider')} — {' and '.join(changed)} redacted by Model Armor"
+            if response_result['withheld']:
+                response_text = (response_text + "\n\n" if response_text else "") + \
+                    "\n".join(f"⚠️ {w}" for w in response_result['withheld'])
 
     return {
-        'response': model_response,
+        'response': response_text,
+        'response_images': [f"data:{i['mime_type']};base64,{i['base64_data']}" for i in response_images],
         'prompt_analysis': prompt_analysis,
         'response_analysis': response_analysis,
         'source': source
@@ -1744,6 +1834,7 @@ def chat():
         
         return jsonify({
             'response': response_text,
+            'response_images': result.get('response_images') or [],
             # Say where the text actually came from. Attributing an app-generated
             # block to the model provider is misleading in a security demo.
             'source': result.get('source') or model_info.get('provider'),

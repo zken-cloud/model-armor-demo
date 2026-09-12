@@ -131,7 +131,7 @@
                                 <div class="modal-body">
                                     <!-- Template Descriptions -->
                                     <h4 class="mb-3">🛡️ Model Armor Templates</h4>
-                                    <p>The application provisions two templates in the <strong>us</strong> multi-region (the first with prompt and response variants). Every filter starts at <strong>High and above</strong> on the <strong>latest</strong> filter model; after that, whatever you change in the editor stays.</p>
+                                    <p>The application provisions two templates in the <strong>us</strong> multi-region, each with a prompt and a response variant. Every filter starts at <strong>High and above</strong> on the <strong>latest</strong> filter model; after that, whatever you change in the editor stays.</p>
                                     <div class="table-responsive mb-4">
                                         <table class="table table-bordered">
                                             <thead class="table-light">
@@ -142,8 +142,8 @@
                                             </thead>
                                             <tbody>
                                                 <tr>
-                                                    <td><strong>Image Redaction (Image Only)</strong> 🖼<br><small class="text-muted">modelarmor-demo-us-imgredact-prompt</small></td>
-                                                    <td>Image input only, no caption. Advanced Sensitive Data Protection with an <em>image</em> de-identify template: every finding is boxed out of the picture and the <strong>redacted image is what the model receives</strong>. The reply shows the redacted image so you can see exactly what was removed. Prompt template only &mdash; a model response is text, so there is no response variant.</td>
+                                                    <td><strong>Image Redaction (Image Only)</strong> 🖼<br><small class="text-muted">modelarmor-demo-us-imgredact-prompt / -response</small></td>
+                                                    <td>Image input only, no caption. Advanced Sensitive Data Protection with an <em>image</em> de-identify template: every finding is boxed out of the picture and the <strong>redacted image is what the model receives</strong>. The reply shows the redacted image so you can see exactly what was removed. As the <strong>response</strong> template it does the same to images the model <em>generates</em> (pick the <code>gemini-3.1-flash-image</code> model): the generated picture is screened and redacted before it is shown.</td>
                                                 </tr>
                                                 <tr>
                                                     <td><strong>Text &amp; Image (Text Redaction Only)</strong> 🖼<br><small class="text-muted">modelarmor-demo-us-text-image-prompt / -response</small></td>
@@ -164,6 +164,7 @@
                                                 <tr><td>An image being screened (jailbreak, PII, malicious URL read out of a picture)</td><td><strong>Text &amp; Image (Text Redaction Only)</strong> as the prompt template, with its SDP Mode set to <strong>Basic</strong> in the editor</td></tr>
                                                 <tr><td>PII being <em>redacted out of an image</em> before the model sees it</td><td><strong>Image Redaction</strong> as the prompt template &mdash; attach the image and send with <em>no caption</em></td></tr>
                                                 <tr><td>PII being <em>redacted</em> from a text prompt before the model sees it</td><td><strong>Text &amp; Image (Text Redaction Only)</strong> as the prompt template (its default SDP setting)</td></tr>
+                                                <tr><td>PII being redacted out of an <em>image the model generates</em></td><td>Model <strong>gemini-3.1-flash-image</strong>, prompt template <strong>No template</strong> (so the details reach the model), <strong>Image Redaction</strong> as the response template, then ask for e.g. <code>Generate a business card for John Smith, phone +1 415 555 0132, email john.smith@example.com</code>. The card comes back with the name and email boxed out. With Text &amp; Image as the prompt template instead, the prompt is redacted first and the model draws <code>[PERSON_NAME]</code> literally &mdash; a nice way to show redaction propagating.</td></tr>
                                                 <tr><td>PII being redacted from the <em>model's answer</em></td><td><strong>Text &amp; Image (Text Redaction Only)</strong> as the response template (works with either prompt template)</td></tr>
                                                 <tr><td>A prompt blocked outright with a canned reply</td><td>Either template, with <strong>Use default</strong> on</td></tr>
                                             </tbody>

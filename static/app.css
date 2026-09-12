@@ -681,6 +681,7 @@ h1 {
 .redacted-figure { margin: 0 0 0.75rem 0; }
 .redacted-image { max-width: 100%; border: 2px solid #d93025; border-radius: 4px; display: block; }
 .redacted-figure figcaption { font-size: 0.75rem; color: #5f6368; margin-top: 0.25rem; }
+.response-image { border-color: #1a73e8; max-height: 480px; object-fit: contain; }
 
 /* Initial hidden state for elements the script later shows by setting an
    inline display. Deliberately NOT the hidden attribute: Bootstrap's reboot
